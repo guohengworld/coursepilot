@@ -1,7 +1,7 @@
 """应用配置，所有可调参数集中管理。
 
 环境变量覆盖：在项目根目录创建 .env 文件，例如：
-    DATABASE_URL=postgresql+asyncpg://postgres:cp_dev@localhost:5432/coursepilot
+    DATABASE_URL=postgresql+asyncpg://postgres:xxx@localhost:5432/coursepilot
     LLM_API_KEY=sk-api-key
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # ── 数据库 ──────────────────────────────────────────
-    database_url: str = "postgresql+asyncpg://postgres:cp_dev@localhost:5432/coursepilot"
+    database_url: str = ""
     db_pool_size: int = 5
     db_max_overflow: int = 10
 
