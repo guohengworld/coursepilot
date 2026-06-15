@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     kp_max_tokens: int = 512         # 知识单元最大 token 数
     chunk_overlap: int = 50          # 切分重叠字数
 
+    # ── MinerU ────────────────────────────────────────
+    mineru_backend: str = "pipeline"       # pipeline / hybrid-engine
+    mineru_method: str = "ocr"             # auto / txt / ocr
+    mineru_lang: str = "ch"               # 文档主要语言
+    mineru_output_dir: str = "./parsed"     # MinerU 输出根目录
+    mineru_model_source: str = "local"     # local / huggingface / modelscope
+
+
     # ── JWT ────────────────────────────────────────────
     jwt_secret_key: str = "1MWdnNG-fSp8hcp0dHQlga7rFAkNaN261p2FFwefgN0"  # 生产环境修改
     jwt_algorithm: str = "HS256"
