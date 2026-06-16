@@ -4,7 +4,13 @@
     DATABASE_URL=postgresql+asyncpg://postgres:xxx@localhost:5432/coursepilot
     LLM_API_KEY=sk-api-key
 """
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+# 项目根目录（config.py 位于 src/coursepilot/，上溯三级）
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class Settings(BaseSettings):
@@ -48,11 +54,14 @@ class Settings(BaseSettings):
 
 
     # ── JWT ────────────────────────────────────────────
-    jwt_secret_key: str = "1MWdnNG-fSp8hcp0dHQlga7rFAkNaN261p2FFwefgN0"  # 生产环境修改
+    jwt_secret_key: str = ""  # 从 .env 加载，为空则启动时报错
     jwt_algorithm: str = "HS256"
     jwt_expire_seconds: int = 86400  # 24 小时
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_PROJECT_ROOT / ".env",
+        extra="ignore",
+    )
 
 
 settings = Settings()

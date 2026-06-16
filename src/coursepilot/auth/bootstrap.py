@@ -17,7 +17,7 @@ from coursepilot.models import User
 async def create_first_superuser() -> User | None:
     """检查是否已有 super 用户，如果没有则创建默认的"""
     async with get_session_etx() as session:
-        result = await session.excute(select(User).where(User.role == "super").limit(1))
+        result = await session.execute(select(User).where(User.role == "super").limit(1))
         existing = result.scalar_one_or_none()
         if existing:
             print("已存在 super 用户，跳过创建")

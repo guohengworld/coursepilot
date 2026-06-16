@@ -1,11 +1,10 @@
 """认证 API：register/login/me"""
-from fastapi import Depends, HTTPException, APIRouter
+from fastapi import Depends, HTTPException, APIRouter, status
 from pydantic import BaseModel, Field
 from typing import Dict
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from streamlit import status
 
 from coursepilot.api.deps import get_current_user
 from coursepilot.auth.jwt import create_token
