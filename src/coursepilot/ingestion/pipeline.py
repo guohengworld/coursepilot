@@ -21,7 +21,12 @@ from coursepilot.models import Document, KnowledgePoint, KnowledgeUnit
 
 logger = logging.getLogger(__name__)
 
-async def run_ingestion(session: AsyncSession, document_id: str) -> None:
+async def run_ingestion(
+    session: AsyncSession,
+    document_id: str,
+    start_page: int = 0,
+    end_page: int | None = None,
+) -> None:
     """执行单个 Document 的 ingestion 管线
 
     调用时机：POST /courses/upload 上传完成后
@@ -43,7 +48,11 @@ async def run_ingestion(session: AsyncSession, document_id: str) -> None:
 
         if ext == "pdf":
             from coursepilot.ingestion.pdf_parser import parse_pdf
-            result = await parse_pdf(file_path)
+            result = await parse_pdf(
+                file_path,
+                start_page=start_page,
+                end_page=end_page,
+            )
         elif ext == "docx":
             from coursepilot.ingestion.docx_parser import parse_docx
             result = parse_docx(file_path)

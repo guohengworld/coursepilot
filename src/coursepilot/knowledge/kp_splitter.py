@@ -60,7 +60,7 @@ class KPSplitter:
 
         for block in blocks:
             text = block.get("content", "")
-            text_level = block.get("meta_data", {}).get("text_level", 99)
+            text_level = block.get("meta_data", {}).get("text_level") or 99
 
             if text_level <= 4:       # 标题行 → 更新上下文
                 current_heading = text
