@@ -70,8 +70,8 @@ async def test_real_pipeline():
 
     _section("阶段 A：从教材提取大纲，构建知识点树")
 
-    # A1. 用 MinerU 解析 PDF
-    _step(1, "MinerU 解析 PDF → content_list + markdown")
+    # A1. 用 MinerU 解析 PDF（唯一一次，Phase B 复用此结果）
+    _step(1, "MinerU 解析 PDF → content_list + markdown（唯一一次解析）")
 
     from coursepilot.ingestion.pdf_parser import parse_pdf
 
@@ -208,7 +208,7 @@ async def test_real_pipeline():
     # 阶段 B：模拟上传 + 全文 ingestion
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    _section("阶段 B：模拟上传教材，执行 ingestion 管线")
+    _section("阶段 B：模拟上传教材，执行 ingestion 管线（复用阶段 A 的 content_list）")
 
     async with get_session_etx() as session:
         import uuid
@@ -251,10 +251,14 @@ async def test_real_pipeline():
 
         doc_id = str(doc.id)
 
-        # B2-B6. 执行 ingestion 管线
-        _step(6, "执行 run_ingestion（解析 → 切分 → KP 分配 → 入库）")
+        # B2-B6. 执行 ingestion 管线（复用 A1 的 content_list，不再重复解析）
+        _step(6, "执行 run_ingestion（跳过解析，直接切分 → KP 分配 → 入库）")
 
-        await run_ingestion(session, doc_id, start_page=0, end_page=20)
+        await run_ingestion(
+            session, doc_id,
+            start_page=0, end_page=20,
+            preparsed_content_list=content_list,
+        )
 
         # 刷新看结果
         await session.refresh(doc)

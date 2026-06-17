@@ -4,13 +4,11 @@
     python -m scripts.seed_knowledge <教材路径> --course-name "高等数学"
 
 示例：
-    python -m scripts.seed_knowledge tests/fixtures/pdfs/同济高等数学·第八版 上册.pdf --course-name "高等数学"
+    python -m scripts.seed_knowledge tests/fixtures/pdfs/同济高等数学·第八版 上册.pdf --course-name "高等数学" --ingest
 
-支持 PDF / DOCX / MD 三种格式，从解析结果中提取标题行（text_level ≤ 4）
-自动构建 kp_path 层级并写入 knowledge_points 表。
-
-前提：需要 DATABASE_URL 环境变量已配置，且对应课程已存在
-      （如课程不存在，请先通过 POST /api/v1/courses 创建）
+支持 PDF / DOCX / MD 三种格式。
+--ingest：除知识点树外，同时将全文解析为知识单元入库。
+          一次 MinerU 解析，两阶段复用，避免重复 OCR。
 """
 
 import argparse
@@ -20,12 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from coursepilot.db import get_session_etx
-from coursepilot.models import Course, KnowledgePoint
 
+async def parse_file(file_path: str) -> tuple[list[dict], list[dict]]:
+    """解析教材文件，返回 (content_list, headings)。
 
-async def extract_headings(file_path: str) -> list[dict]:
-    """解析教材文件，只提取标题行（text_level ≤ 4），保留 page_idx。"""
+    这是整个 seed 流程中唯一一次文件解析。
+    """
     ext = Path(file_path).suffix.lower().lstrip(".")
 
     if ext == "pdf":
@@ -53,7 +51,7 @@ async def extract_headings(file_path: str) -> list[dict]:
                 "level": level,
                 "page_idx": item.get("page_idx", 0),
             })
-    return headings
+    return content_list, headings
 
 
 def headings_to_syllabus(headings: list[dict], course_name: str) -> list[dict]:
@@ -61,7 +59,7 @@ def headings_to_syllabus(headings: list[dict], course_name: str) -> list[dict]:
 
     用栈维护层级关系，功能等价于 SyllabusParser.parse() + flatten()。
     """
-    stack: list[dict] = []  # [{title, level, ...}]
+    stack: list[dict] = []
     result: list[dict] = []
     counters: dict[int, int] = {}
 
@@ -71,13 +69,11 @@ def headings_to_syllabus(headings: list[dict], course_name: str) -> list[dict]:
         if not title:
             continue
 
-        # 弹出栈中 level >= 当前 level 的兄弟
         while stack and stack[-1]["level"] >= level:
             stack.pop()
 
         counters[level] = counters.get(level, 0) + 1
 
-        # 构建 kp_path
         if stack:
             parent = stack[-1]
             kp_path = parent["kp_path"] + "/" + title
@@ -115,22 +111,26 @@ async def main():
         "--dry-run", action="store_true",
         help="仅打印提取结果，不写入数据库",
     )
+    parser.add_argument(
+        "--ingest", action="store_true",
+        help="除知识点树外，同时将全文解析为知识单元入库（一次解析，不重复调用 MinerU）",
+    )
     args = parser.parse_args()
 
-    # 1. 提取标题
+    # ━━━━ 1. 解析文件（唯一一次 MinerU 调用）━━━━
     print(f"解析文件: {args.file}")
-    headings = await extract_headings(args.file)
+    content_list, headings = await parse_file(args.file)
 
     if not headings:
         print("未提取到任何标题（text_level ≤ 4），请检查文件内容")
         return
 
-    print(f"提取到 {len(headings)} 个标题:")
+    print(f"提取到 {len(headings)} 个标题，content_list 共 {len(content_list)} 行:")
     for h in headings:
         indent = "  " * (h["level"] - 1)
         print(f"  {indent}[L{h['level']}] {h['title']}  (page {h['page_idx']})")
 
-    # 2. 构建知识点节点
+    # ━━━━ 2. 构建知识点节点 ━━━━
     nodes = headings_to_syllabus(headings, args.course_name)
     print(f"\n构建 {len(nodes)} 个知识点节点:")
     for n in nodes:
@@ -141,7 +141,10 @@ async def main():
         print("\n[dry-run] 未写入数据库")
         return
 
-    # 3. 写入数据库
+    # ━━━━ 3. 写入数据库 ━━━━
+    from coursepilot.db import get_session_etx
+    from coursepilot.models import Course, KnowledgePoint
+
     async with get_session_etx() as session:
         from sqlalchemy import select, delete
 
@@ -186,6 +189,86 @@ async def main():
 
         await session.flush()
         print(f"已写入 {len(nodes)} 个知识点到数据库")
+
+        # ━━━━ 4. --ingest：继续做知识单元入库 ━━━━
+        if not args.ingest:
+            return
+
+        import uuid
+        from coursepilot.models import Document, KnowledgeUnit, User
+        from coursepilot.ingestion.parser_utils import extract_knowledge_units
+        from coursepilot.knowledge.kp_splitter import KPSplitter
+
+        print(f"\n── 开始 ingestion（复用已有解析结果，不重复调用 MinerU）──")
+
+        # 4a. 创建 Document 记录
+        r = await session.execute(
+            select(User).where(User.role == "super").limit(1)
+        )
+        uploader = r.scalar_one()
+
+        doc = Document(
+            course_id=course.id,
+            filename=Path(args.file).name,
+            file_type=Path(args.file).suffix.lower().lstrip("."),
+            file_size=Path(args.file).stat().st_size,
+            file_path=args.file,  # 原始文件路径
+            uploader_id=uploader.id,
+            status="processing",
+        )
+        session.add(doc)
+        await session.flush()
+        await session.refresh(doc)
+        print(f"  Document 创建: id={doc.id}, file={doc.filename}")
+
+        # 4b. 切分为知识单元
+        units = extract_knowledge_units(
+            content_list,
+            document_id=str(doc.id),
+            kp_id="",
+        )
+        print(f"  切分得到 {len(units)} 个文本块")
+
+        # 4c. 查知识点列表 + KPSplitter 分配
+        kp_result = await session.execute(
+            select(KnowledgePoint)
+            .where(KnowledgePoint.course_id == course.id)
+            .order_by(KnowledgePoint.sort_order)
+        )
+        kp_nodes = [
+            {
+                "id": str(kp.id), "title": kp.title,
+                "kp_path": kp.kp_path,
+                "level": len(kp.kp_path.split("/")),
+            }
+            for kp in kp_result.scalars()
+        ]
+
+        if kp_nodes:
+            splitter = KPSplitter(kp_nodes, str(course.id))
+            units = splitter.assign(units)
+
+        # 4d. 批量插入 knowledge_units
+        for u in units:
+            ku = KnowledgeUnit(
+                kp_id=uuid.UUID(u["kp_id"]) if u.get("kp_id") else None,
+                document_id=doc.id,
+                content=u["content"],
+                summary=u.get("summary"),
+                seq_order=u.get("seq_order", 0),
+                page_ref=u.get("page_ref", ""),
+                meta_data=u.get("meta_data", {}),
+            )
+            session.add(ku)
+
+        doc.status = "ready"
+        doc.page_count = len(units)
+        await session.flush()
+
+        # 统计覆盖
+        kp_covered = len(set(u.get("kp_id") for u in units if u.get("kp_id")))
+        print(f"  入库 {len(units)} 个知识单元，覆盖 {kp_covered}/{len(kp_nodes)} 个知识点")
+        print(f"  Document 状态: {doc.status}")
 
 
 if __name__ == "__main__":

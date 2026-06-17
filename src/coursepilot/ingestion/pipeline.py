@@ -26,11 +26,15 @@ async def run_ingestion(
     document_id: str,
     start_page: int = 0,
     end_page: int | None = None,
+    *,
+    preparsed_content_list: list[dict] | None = None,
 ) -> None:
-    """执行单个 Document 的 ingestion 管线
+    """执行单个 Document 的 ingestion 管线。
 
-    调用时机：POST /courses/upload 上传完成后
-    Week 3 会在本函数末尾追加 Milvus 编码 + BM25 索引步骤
+    调用时机：POST /courses/upload 上传完成后。
+    若传入 preparsed_content_list 则跳过文件解析，直接复用已有结果，
+    避免同一个 PDF 被 MinerU 重复 OCR（一次解析耗时 5~100 分钟）。
+    Week 3 会在本函数末尾追加 Milvus 编码 + BM25 索引步骤。
     """
     # 1. 获取 Document 记录
     doc = await session.get(Document, UUID(document_id))
@@ -42,27 +46,31 @@ async def run_ingestion(
     await session.flush()
 
     try:
-        # 2. 解析文件 → content_list
-        file_path = doc.file_path
-        ext = doc.file_type
-
-        if ext == "pdf":
-            from coursepilot.ingestion.pdf_parser import parse_pdf
-            result = await parse_pdf(
-                file_path,
-                start_page=start_page,
-                end_page=end_page,
-            )
-        elif ext == "docx":
-            from coursepilot.ingestion.docx_parser import parse_docx
-            result = parse_docx(file_path)
-        elif ext == "md":
-            from coursepilot.ingestion.markdown_parser import parse_markdown
-            result = parse_markdown(file_path)
+        # 2. 解析文件 → content_list（优先使用预解析结果）
+        if preparsed_content_list is not None:
+            content_list = preparsed_content_list
         else:
-            raise ValueError(f"不支持的文件格式: .{ext}")
+            file_path = doc.file_path
+            ext = doc.file_type
 
-        content_list = result.get("content_list", [])
+            if ext == "pdf":
+                from coursepilot.ingestion.pdf_parser import parse_pdf
+                result = await parse_pdf(
+                    file_path,
+                    start_page=start_page,
+                    end_page=end_page,
+                )
+            elif ext == "docx":
+                from coursepilot.ingestion.docx_parser import parse_docx
+                result = parse_docx(file_path)
+            elif ext == "md":
+                from coursepilot.ingestion.markdown_parser import parse_markdown
+                result = parse_markdown(file_path)
+            else:
+                raise ValueError(f"不支持的文件格式: .{ext}")
+
+            content_list = result.get("content_list", [])
+
         if not content_list:
             raise ValueError("解析结果为空")
 
