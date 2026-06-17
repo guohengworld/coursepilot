@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from coursepilot.api.auth import router as auth_router
+from coursepilot.api.courses import router as courses_router
 from coursepilot.db import engine
 
 @asynccontextmanager
@@ -34,6 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(courses_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health():

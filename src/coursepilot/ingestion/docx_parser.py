@@ -17,7 +17,7 @@ from docx.oxml.ns import qn
 from coursepilot.ingestion.parser_utils import extract_knowledge_units
 
 
-def parse_docx(file_path: str) -> dict[str, Any]:
+async def parse_docx(file_path: str) -> dict[str, Any]:
     """解析 DOCX 文件，返回结构化内容。
 
     返回格式（与 MinerU 的 content_list 兼容）:
