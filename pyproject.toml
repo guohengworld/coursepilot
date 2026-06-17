@@ -23,6 +23,7 @@ dependencies = [
     "python-jose[cryptography]>=3.3,<4",
     "streamlit>=1.40,<2",
     "bcrypt<4.1",
+    "mineru>=3.3,<4",
 ]
 
 [project.optional-dependencies]
