@@ -47,10 +47,12 @@ class Settings(BaseSettings):
 
     # ── MinerU ────────────────────────────────────────
     mineru_backend: str = "pipeline"       # pipeline / hybrid-engine
-    mineru_method: str = "ocr"             # auto / txt / ocr
+    mineru_method: str = "auto"            # auto / txt / ocr（auto = 文字页跳过 OCR）
     mineru_lang: str = "ch"               # 文档主要语言
     mineru_output_dir: str = "./parsed"     # MinerU 输出根目录
     mineru_model_source: str = "local"     # local / huggingface / modelscope
+    mineru_formula_enable: bool = True     # 公式识别（Phase A 可关闭）
+    mineru_table_enable: bool = True       # 表格识别（Phase A 可关闭）
 
 
     # ── JWT ────────────────────────────────────────────

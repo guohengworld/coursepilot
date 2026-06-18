@@ -86,6 +86,10 @@ async def test_real_pipeline():
     content_list = pdf_result["content_list"]
     markdown_text = pdf_result["markdown"]
     print(f"  解析完成：content_list 共 {len(content_list)} 行，markdown 共 {len(markdown_text)} 字符")
+    if "_timings" in pdf_result:
+        print(f"  [TIMINGS] {pdf_result['_timings']}")
+    if "_config" in pdf_result:
+        print(f"  [CONFIG] {pdf_result['_config']}")
 
     # 展示 markdown 前 1500 字符
     print("\n  ── Markdown 预览（前 1500 字符）──")
