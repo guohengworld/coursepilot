@@ -1,109 +1,109 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件为 Claude Code (claude.ai/code) 在处理本代码仓库时提供指导。
 
-## Common Commands
+## 常用命令
 
 ```bash
-# Run all unit tests
+# 运行所有单元测试
 PYTHONPATH=src .venv/Scripts/python -m pytest tests/test_week2.py -v
 
-# Run a single test
+# 运行单个测试
 PYTHONPATH=src .venv/Scripts/python -m pytest tests/test_week2.py::TestKPSplitter::test_exact_heading_match -v
 
-# Run the slow real-pipeline integration test (MinerU, requires DB)
+# 运行较慢的真实管道集成测试（MinerU，需要数据库）
 PYTHONPATH=src .venv/Scripts/python -m pytest tests/test_real_pipeline.py -v -s
 
-# Lint
+# 代码规范检查
 .venv/Scripts/ruff check src/ tests/ scripts/
 
-# Type-check
+# 类型检查
 .venv/Scripts/mypy src/
 
-# Start the API server
+# 启动 API 服务器
 .venv/Scripts/uvicorn coursepilot.main:app --reload
 
-# Bootstrap (create first superuser)
+# 初始化引导（创建首个超级用户）
 PYTHONPATH=src .venv/Scripts/python -m coursepilot.auth.bootstrap
 
-# Seed a course from a PDF (KP tree + knowledge units, one parse)
+# 从 PDF 种子化课程数据（KP 树 + 知识单元，单次解析）
 PYTHONPATH=src .venv/Scripts/python -m scripts.seed_knowledge "tests/fixtures/pdfs/书名.pdf" --course-name "课程名" --ingest
 
-# Batch ingest all 8 textbooks (5 courses)
+# 批量导入全部 8 本教材（5 门课程）
 PYTHONPATH=src .venv/Scripts/python -m scripts.batch_ingest
 
-# Alembic
-alembic revision --autogenerate -m "描述"
+# Alembic 数据库迁移
+alembic revision --autogenerate -m "描述信息"
 alembic upgrade head
 ```
 
-## Architecture
+## 系统架构
 
-CoursePilot is an AI teaching assistant for CS courses. **Backend**: FastAPI + SQLAlchemy async + PostgreSQL. **Parsing**: MinerU (PDF OCR) + python-docx + custom Markdown. **Planned**: Milvus vector store, LangGraph agent, Streamlit UI.
+CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技术栈：FastAPI + SQLAlchemy 异步模式 + PostgreSQL。文档解析：MinerU（PDF OCR）+ python-docx + 自定义 Markdown 解析器。规划中：Milvus 向量存储、LangGraph Agent、Streamlit UI。
 
-### Two-Phase Ingestion Pipeline (Critical)
+## 两阶段导入管道（核心机制）
 
-The core data flow has two phases that run at **different times**:
+核心数据流分为两个在不同时间执行的阶段：
 
-**Phase A — Build Knowledge Point tree (one-time per course):**
-`scripts/seed_knowledge.py` or `scripts/batch_ingest.py` →
-parse file once → extract headings (text_level ≤ 4) → `headings_to_syllabus()` builds `kp_path` hierarchy → INSERT `knowledge_points` (adjacency list with `parent_id`)
+**阶段 A — 构建知识点树（每门课程仅执行一次）**：
+`scripts/seed_knowledge.py` 或 `scripts/batch_ingest.py` →
+单次解析文件 → 提取标题（text_level ≤ 4）→ `headings_to_syllabus()` 构建 `kp_path` 层级结构 → 插入 `knowledge_points` 表（基于 `parent_id` 的邻接表模型）
 
-**Phase B — Convert document to Knowledge Units (per upload):**
+**阶段 B — 将文档转换为知识单元（每次上传时执行）**：
 `POST /courses/upload` → `pipeline.run_ingestion()` →
-parse file → `parser_utils.extract_knowledge_units()` splits by headings → `KPSplitter.assign()` matches each chunk to a KP → INSERT `knowledge_units`
+解析文件 → `parser_utils.extract_knowledge_units()` 按标题分割文本 → `KPSplitter.assign()` 将每个文本块匹配到对应的知识点 → 插入 `knowledge_units` 表
 
-**Critical rule: Never parse the same file twice.** MinerU takes ~100 min for a 300-page PDF. `run_ingestion()` accepts `preparsed_content_list` to skip re-parsing. `seed_knowledge.py --ingest` does both phases in one parse. The batch script processes multi-volume courses (e.g., 上下册) by merging all headings into a shared KP tree while creating separate Documents per volume.
+**关键规则**：严禁对同一文件重复解析。MinerU 解析必须检查是否走 GPU。`run_ingestion()` 支持传入 `preparsed_content_list` 参数以跳过重新解析。`seed_knowledge.py --ingest` 可在单次解析中同时完成上述两个阶段。对于多卷册课程（如上下册），批量脚本会将所有卷册的标题合并到共享的 KP 树中，同时为每一卷创建独立的 Document 记录。
 
-### Key Files
+## 关键文件清单
 
-| File | Role |
-|------|------|
-| `src/coursepilot/config.py` | All settings via pydantic-settings, loaded from `.env` |
-| `src/coursepilot/db.py` | Async engine, `get_session()` for FastAPI DI, `get_session_etx()` for scripts |
-| `src/coursepilot/main.py` | FastAPI app, registers auth + courses routers |
-| `src/coursepilot/api/auth.py` | Register, login (JWT), me |
-| `src/coursepilot/api/courses.py` | Course CRUD, upload + trigger ingestion, document list, KP tree query |
-| `src/coursepilot/api/deps.py` | `get_current_user` (JWT → User), `require_superuser` |
-| `src/coursepilot/ingestion/pipeline.py` | `run_ingestion()` — the B1→B6 orchestration |
-| `src/coursepilot/ingestion/pdf_parser.py` | `parse_pdf()` — wraps MinerU CLI, returns `{markdown, content_list}` |
-| `src/coursepilot/ingestion/docx_parser.py` | `parse_docx()` — sync (python-docx), returns same format |
-| `src/coursepilot/ingestion/markdown_parser.py` | `parse_markdown()` — sync, same content_list format |
-| `src/coursepilot/ingestion/parser_utils.py` | `extract_knowledge_units()` — `_split_by_headings()` + `_split_text()` |
-| `src/coursepilot/knowledge/kp_splitter.py` | `KPSplitter` — matches text blocks to KPs (exact→cleaned→keyword→root fallback) |
-| `src/coursepilot/knowledge/syllabus_parser.py` | `SyllabusParser` — markdown/Chinese-numbered outline → tree nodes |
-| `src/coursepilot/knowledge/kp_tree.py` | `KPTree` — recursive CTE queries, batch insert with parent_id backfill |
-| `src/coursepilot/storage/file_store.py` | `FileStore` — local filesystem, UUID filenames under `data/uploads/<course_id>/` |
-| `scripts/seed_knowledge.py` | CLI: parse PDF → headings → KP tree; `--ingest` also does knowledge units |
-| `scripts/batch_ingest.py` | Batch process all 8 PDFs in `tests/fixtures/pdfs/`, grouped by course |
+| 文件路径 | 职责说明 |
+| :--- | :--- |
+| src/coursepilot/config.py | 所有配置项，通过 pydantic-settings 从 .env 加载 |
+| src/coursepilot/db.py | 异步引擎，FastAPI 依赖注入用的 get_session()，脚本用的 get_session_etx() |
+| src/coursepilot/main.py | FastAPI 应用入口，注册 auth 和 courses 路由 |
+| src/coursepilot/api/auth.py | 注册、登录（JWT）、获取当前用户信息 |
+| src/coursepilot/api/courses.py | 课程增删改查、上传并触发导入、文档列表、KP 树查询 |
+| src/coursepilot/api/deps.py | get_current_user（JWT → User）、require_superuser 权限校验 |
+| src/coursepilot/ingestion/pipeline.py | run_ingestion() — B1→B6 流程编排 |
+| src/coursepilot/ingestion/pdf_parser.py | parse_pdf() — 封装 MinerU CLI，返回 {markdown, content_list} |
+| src/coursepilot/ingestion/docx_parser.py | parse_docx() — 同步解析（python-docx），返回相同格式 |
+| src/coursepilot/ingestion/markdown_parser.py | parse_markdown() — 同步解析，相同的 content_list 格式 |
+| src/coursepilot/ingestion/parser_utils.py | extract_knowledge_units() — _split_by_headings() +_split_text() |
+| src/coursepilot/knowledge/kp_splitter.py | KPSplitter — 将文本块匹配到 KP（精确匹配→清洗后匹配→关键词匹配→根节点回退） |
+| src/coursepilot/knowledge/syllabus_parser.py | SyllabusParser — Markdown/中文编号大纲 → 树节点 |
+| src/coursepilot/knowledge/kp_tree.py | KPTree — 递归 CTE 查询，使用 parent_id 回填的批量插入 |
+| src/coursepilot/storage/file_store.py | FileStore — 本地文件系统存储，文件保存在 data/uploads// 下，使用 UUID 命名 |
+| scripts/seed_knowledge.py | CLI 工具：解析 PDF → 提取标题 → 构建 KP 树；--ingest 参数可同时执行知识单元导入 |
+| scripts/batch_ingest.py | 批量处理 tests/fixtures/pdfs/ 下的全部 8 个 PDF，按课程分组 |
 
-### Database Models (11 tables)
+## 数据库模型（11 张表）
 
-`User` → `Course` → `KnowledgePoint` (adjacency list, `parent_id` self-ref, depth ≤ 4) → `KnowledgeUnit` (chunks with `kp_id`).
-`User` → `Document` (uploaded file, status: pending→processing→ready/failed).
-`User` → `Question`, `PracticeRecord`, `DiagnosisReport`, `ReviewPlan`, `QARecord`, `EvalMetric`.
+- `User` → `Course` → `KnowledgePoint`（邻接表模型，`parent_id` 自引用，深度 ≤ 4）→ `KnowledgeUnit`（带 `kp_id` 的文本块）。
+- `User` → `Document`（上传的文件，状态流转：pending → processing → ready/failed）。
+- `User` → `Question`、`PracticeRecord`、`DiagnosisReport`、`ReviewPlan`、`QARecord`、`EvalMetric`。
 
-### API Routes
+## API 路由
 
-- `POST/GET /api/v1/auth/register|login`, `GET /auth/me`
-- `GET/POST /api/v1/courses`, `GET/DELETE /courses/{id}`
-- `POST /courses/upload` (multipart: file + course_id, triggers ingestion inline)
-- `GET /courses/{id}/documents`, `DELETE /courses/{id}/document/{doc_id}`
-- `GET /courses/{id}/knowledge-points` (flat list with parent_id for frontend tree rendering)
+- `POST/GET /api/v1/auth/register|login`，`GET /auth/me`
+- `GET/POST /api/v1/courses`，`GET/DELETE /courses/{id}`
+- `POST /courses/upload`（multipart 表单：file + course_id，触发内联导入）
+- `GET /courses/{id}/documents`，`DELETE /courses/{id}/document/{doc_id}`
+- `GET /courses/{id}/knowledge-points`（返回带 parent_id 的扁平列表，供前端渲染树形结构）
 
-### Configuration
+## 配置说明
 
-`.env` at project root. Required: `DATABASE_URL=postgresql+asyncpg://...`, `JWT_SECRET_KEY=...`, `MINERU_MODEL_SOURCE=local`. See `config.py` for all defaults.
+配置文件为项目根目录下的 `.env`。必填项：`DATABASE_URL=postgresql+asyncpg://...`、`JWT_SECRET_KEY=...`、`MINERU_MODEL_SOURCE=local`。所有默认值详见 `config.py`。
 
-### Test Structure
+## 测试结构
 
-- `tests/test_week2.py` — 56 unit tests covering parsers, syllabus extraction, KP splitter, file store, edge cases (no DB needed, 2 skipped require DB)
-- `tests/test_real_pipeline.py` — single slow integration test, 8 steps, requires PostgreSQL + MinerU
+- `tests/test_week2.py` — 56 个单元测试，覆盖解析器、大纲提取、KP 分割器、文件存储及边缘情况（无需数据库，其中 2 个需要数据库的测试会被跳过）。
+- `tests/test_real_pipeline.py` — 单个慢速集成测试，包含 8 个步骤，需要 PostgreSQL + MinerU 环境。
 
-### Key Patterns
+## 关键设计模式
 
-- All DB operations are async (`AsyncSession`). Use `get_session_etx()` in scripts, `Depends(get_session)` in FastAPI routes.
-- `KnowledgePoint.kp_path` like `"微积分/定积分/牛顿-莱布尼茨公式"` is the canonical hierarchical identifier; `parent_id` is denormalized for CTE queries.
-- `content_list` is the universal intermediate format: `[{type, text, text_level, page_idx}, ...]`. All three parsers (PDF/DOCX/MD) produce it.
-- `text_level ≤ 4` = heading (font size in PDF, Heading style in DOCX, `#` depth in MD), `99` = body text.
-- The `KPSplitter` uses a heading-context stack: when a heading line is encountered, it updates `current_heading`; body lines inherit the current heading's KP.
+- 所有数据库操作均为异步（`AsyncSession`）。脚本中使用 `get_session_etx()`，FastAPI 路由中使用 `Depends(get_session)`。
+- `KnowledgePoint.kp_path`（如 `"微积分/定积分/牛顿-莱布尼茨公式"`）是规范的层级标识符；`parent_id` 字段经过反规范化处理以支持 CTE 查询。
+- `content_list` 是通用的中间数据格式：`[{type, text, text_level, page_idx}, ...]`。三种解析器（PDF/DOCX/MD）均生成该格式。
+- `text_level ≤ 4` 表示标题（PDF 中基于字体大小，DOCX 中基于 Heading 样式，MD 中基于 `#` 层级），`99` 表示正文文本。
+- `KPSplitter` 使用标题上下文栈机制：遇到标题行时更新 `current_heading`；正文行自动继承当前标题对应的 KP。
