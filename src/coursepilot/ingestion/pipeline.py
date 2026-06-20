@@ -1,10 +1,12 @@
-"""Ingestion 管线：解析文件 → 切分 → KP 分配 → 入库
+"""Ingestion 管线：解析文件 → 切分 → KP 分配 → 摘要 → 入库
 
 流程：
   Document(status=pending)
     → 解析文件（pdf_parser / docx_parser）
-    → extract_knowledge_units 切分
+    → extract_knowledge_units 切分（阶段 A 改造：垃圾过滤 + heading 追踪 + 数学块感知）
     → KPSplitter 分配到知识点
+    → SummaryBridge 生成摘要（B6，阶段 A 新增）
+    → encode_units → Milvus（B7，阶段 B 实施）
     → Document（status=ready）
 """
 
@@ -21,6 +23,7 @@ from coursepilot.models import Document, KnowledgePoint, KnowledgeUnit
 
 logger = logging.getLogger(__name__)
 
+
 async def run_ingestion(
     session: AsyncSession,
     document_id: str,
@@ -34,7 +37,6 @@ async def run_ingestion(
     调用时机：POST /courses/upload 上传完成后。
     若传入 preparsed_content_list 则跳过文件解析，直接复用已有结果，
     避免同一个 PDF 被 MinerU 重复 OCR（一次解析耗时 5~100 分钟）。
-    Week 3 会在本函数末尾追加 Milvus 编码 + BM25 索引步骤。
     """
     # 1. 获取 Document 记录
     doc = await session.get(Document, UUID(document_id))
@@ -46,7 +48,7 @@ async def run_ingestion(
     await session.flush()
 
     try:
-        # 2. 解析文件 → content_list（优先使用预解析结果）
+        # ── B1: 解析文件 → content_list ──────────────────
         if preparsed_content_list is not None:
             content_list = preparsed_content_list
         else:
@@ -55,6 +57,7 @@ async def run_ingestion(
 
             if ext == "pdf":
                 from coursepilot.ingestion.pdf_parser import parse_pdf
+
                 result = await parse_pdf(
                     file_path,
                     start_page=start_page,
@@ -62,9 +65,11 @@ async def run_ingestion(
                 )
             elif ext == "docx":
                 from coursepilot.ingestion.docx_parser import parse_docx
+
                 result = parse_docx(file_path)
             elif ext == "md":
                 from coursepilot.ingestion.markdown_parser import parse_markdown
+
                 result = parse_markdown(file_path)
             else:
                 raise ValueError(f"不支持的文件格式: .{ext}")
@@ -74,15 +79,19 @@ async def run_ingestion(
         if not content_list:
             raise ValueError("解析结果为空")
 
-        # 3. 切分为 KnowledgeUnit
+        # ── B2: 切分为 KnowledgeUnit（阶段 A 改造） ──────
+        #   A1: _split_by_headings 追踪 heading 写入 meta_data
+        #   A2: _filter_garbage 垃圾过滤
+        #   A3: _split_text_v2 数学块感知 + 段落边界优先
         from coursepilot.ingestion.parser_utils import extract_knowledge_units
+
         units = extract_knowledge_units(
             content_list,
             document_id=str(doc.id),
-            kp_id="",   # 暂时为空，下面由 KPSplitter 分配
+            kp_id="",  # 暂时为空，下面由 KPSplitter 分配
         )
 
-        # 4. 用知识点树分配 kp_id
+        # ── B3: 用知识点树分配 kp_id ────────────────────
         kp_result = await session.execute(
             select(KnowledgePoint)
             .where(KnowledgePoint.course_id == doc.course_id)
@@ -90,18 +99,30 @@ async def run_ingestion(
         )
         kp_nodes = [
             {
-                "id": str(kp.id), "title": kp.title,
-                "kp_path": kp.kp_path, "level": _kp_level(kp.kp_path),
+                "id": str(kp.id),
+                "title": kp.title,
+                "kp_path": kp.kp_path,
+                "level": _kp_level(kp.kp_path),
             }
             for kp in kp_result.scalars()
         ]
 
         if kp_nodes:
             from coursepilot.knowledge.kp_splitter import KPSplitter
+
             splitter = KPSplitter(kp_nodes, str(doc.course_id))
             units = splitter.assign(units)
 
-        # 5. 批量插入 knowledge_units
+        # ── B6: SummaryBridge 生成摘要（阶段 A 新增） ────
+        from coursepilot.rag.summary_bridge import SummaryBridge
+
+        bridge = SummaryBridge()
+        units = await bridge.run(units)
+
+        # ── B7: encode + Milvus insert（阶段 B 实施） ────
+        await _encode_units(units)
+
+        # ── B8: 批量插入 knowledge_units ─────────────────
         for u in units:
             ku = KnowledgeUnit(
                 kp_id=UUID(u["kp_id"]) if u.get("kp_id") else None,
@@ -125,6 +146,16 @@ async def run_ingestion(
         await session.flush()
         logger.error(f"Document {doc.filename} ingestion failed: {exc}")
         raise
+
+
+async def _encode_units(units: list[dict]) -> None:
+    """B7: BGE-M3 编码 + Milvus insert（阶段 B 占位）。
+
+    TODO: 阶段 B 实施 rag/encoder.py + rag/vector_store.py 后替换此函数。
+    """
+    if not units:
+        return
+    logger.info("B7 encode_units: 跳过（阶段 B 尚未实施，%d units）", len(units))
 
 
 def _kp_level(kp_path: str) -> int:

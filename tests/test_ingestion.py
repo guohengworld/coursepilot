@@ -35,6 +35,7 @@ def sample_content_list():
 class TestSplitByHeadings:
     def test_basic_split(self, sample_content_list):
         from coursepilot.ingestion.parser_utils import _split_by_headings
+
         blocks = _split_by_headings(sample_content_list)
         assert len(blocks) == 3
         assert "第一章 函数与极限" in blocks[0]["text"]
@@ -43,36 +44,64 @@ class TestSplitByHeadings:
 
     def test_page_ref(self, sample_content_list):
         from coursepilot.ingestion.parser_utils import _split_by_headings
+
         blocks = _split_by_headings(sample_content_list)
-        print( blocks)
+        print(blocks)
         assert "p2" in blocks[2]["page_ref"]  # "二、函数" 在 page_idx=1
 
 
-class TestSplitText:
+class TestSplitTextV2:
     def test_short_text_no_split(self):
-        from coursepilot.ingestion.parser_utils import _split_text
+        from coursepilot.ingestion.parser_utils import _split_text_v2
+
         text = "短文本"
-        chunks = _split_text(text, max_tokens=100, overlap=20)
+        chunks = _split_text_v2(text, target_chars=800, hard_lower=400, hard_upper=1200)
         assert chunks == [text]
 
-    def test_long_text_is_split(self):
-        from coursepilot.ingestion.parser_utils import _split_text
-        text = "A" * 1000
-        chunks = _split_text(text, max_tokens=100, overlap=20)
-        assert len(chunks) > 1
-        assert chunks[1].startswith("A" * 20)  # overlap
-        original = "".join(chunks)
-        # 可能有轻微 gap 或重复，但大致覆盖
-        assert len(original) >= len(text) * 0.9
+    def test_long_text_is_split_with_paragraph_boundary(self):
+        from coursepilot.ingestion.parser_utils import _split_text_v2
+
+        # 两段各 ~600 字符，总长 ~1200 > hard_upper=900 → 应在段落边界切分
+        para = "数学分析是研究函数的学科。" * 50  # ~600 chars
+        text = para + "\n\n" + para
+        chunks = _split_text_v2(text, target_chars=800, hard_lower=300, hard_upper=900)
+        assert len(chunks) == 2
+        assert chunks[0] == para
+
+    def test_long_text_forced_split(self):
+        from coursepilot.ingestion.parser_utils import _split_text_v2
+
+        # 超长无段落边界的文本 → 在句边界或强制切分
+        text = "这是测试文本。" * 200  # ~1400 chars
+        chunks = _split_text_v2(text, target_chars=800, hard_lower=300, hard_upper=1000)
+        assert len(chunks) >= 2
+        for chunk in chunks:
+            assert len(chunk) <= 1000  # 不超过 hard_upper
+
+    def test_math_block_protected(self):
+        from coursepilot.ingestion.parser_utils import _split_text_v2
+
+        # 数学块 $$...$$ 跨越切分边界时，切分点应避开数学块
+        before = "微积分基础知识。" * 30  # ~300 chars
+        math_block = "$$\n\\int_a^b f(x)dx = F(b) - F(a)\n$$"
+        after = "这是牛顿-莱布尼茨公式。" * 40  # ~500 chars
+        text = before + "\n\n" + math_block + "\n\n" + after
+        chunks = _split_text_v2(text, target_chars=800, hard_lower=300, hard_upper=1200)
+        # 数学块应完整保留在某个 chunk 中
+        math_in_chunks = [math_block in c for c in chunks]
+        assert any(math_in_chunks), "数学块应完整保留"
 
 
 class TestExtractKnowledgeUnits:
     def test_basic(self, sample_content_list):
         from coursepilot.ingestion.parser_utils import extract_knowledge_units
+
         doc_id = "00000000-0000-0000-0000-000000000001"
         kp_id = "00000000-0000-0000-0000-000000000002"
         units = extract_knowledge_units(
-            sample_content_list, document_id=doc_id, kp_id=kp_id,
+            sample_content_list,
+            document_id=doc_id,
+            kp_id=kp_id,
         )
         assert len(units) == 3
         for u in units:
@@ -82,9 +111,11 @@ class TestExtractKnowledgeUnits:
 
     def test_document_id_and_kp_id(self, sample_content_list):
         from coursepilot.ingestion.parser_utils import extract_knowledge_units
+
         units = extract_knowledge_units(
             sample_content_list,
-            document_id="doc-1", kp_id="kp-1",
+            document_id="doc-1",
+            kp_id="kp-1",
         )
         for u in units:
             assert u["document_id"] == "doc-1"
@@ -111,6 +142,7 @@ class TestDocxParser:
         doc.save(str(file_path))
 
         from coursepilot.ingestion.docx_parser import parse_docx
+
         result = parse_docx(str(file_path))
 
         assert len(result["content_list"]) == 4
@@ -123,6 +155,7 @@ class TestDocxParser:
     def test_extract_knowledge_units_from_docx(self, tmp_path):
         """DOCX 解析后接 KnowledgeUnit 切片。"""
         from docx import Document
+
         doc = Document()
         doc.add_heading("第一章", level=1)
         doc.add_paragraph("内容一。")
@@ -138,7 +171,8 @@ class TestDocxParser:
         parsed = parse_docx(str(file_path))
         units = extract_knowledge_units(
             parsed["content_list"],
-            document_id="doc-1", kp_id="kp-1",
+            document_id="doc-1",
+            kp_id="kp-1",
         )
 
         assert len(units) == 2
@@ -158,6 +192,7 @@ async def test_parse_pdf_small_file():
         pytest.skip("report.pdf not found")
 
     from coursepilot.ingestion.pdf_parser import parse_pdf
+
     result = await parse_pdf(str(pdf), str(output_dir), start_page=0, end_page=1)
 
     assert "项目验收报告" in result["markdown"]
@@ -179,7 +214,8 @@ async def test_parse_pdf_and_chunk():
     print(result)
     units = extract_knowledge_units(
         result["content_list"],
-        document_id="doc-1", kp_id="kp-1",
+        document_id="doc-1",
+        kp_id="kp-1",
     )
     print(units)
 

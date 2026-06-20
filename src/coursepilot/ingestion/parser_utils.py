@@ -1,100 +1,245 @@
-"""解析器共享工具 —— 内容切片、标题分块、页码格式化"""
+"""解析器共享工具 —— 内容切片、标题分块、页码格式化
+
+阶段 A 改造：
+  - A1: _split_by_headings 追踪当前标题文本，写入 meta_data["heading"]
+  - A2: _filter_garbage 垃圾过滤（CIP、封面、目录页）
+  - A3: _split_text_v2 数学块感知 + 段落边界优先
+"""
 
 from __future__ import annotations
 
+import re
+
+# ── A2: 垃圾过滤 ───────────────────────────────────────────
+
+GARBAGE_PATTERNS: list[str] = [
+    r"^[A-Z]{3,}\s.*CIP",  # CIP 数据（英文）
+    r"^图书在版编目",  # CIP 数据（中文）
+    r"^内容简介|^本书.*编写",  # 出版信息
+    r"^封面|^扉页|^版权",  # 页面类型标记
+]
+
+GARBAGE_PAGE_RANGE: tuple[int, int] = (0, 2)  # 前 3 页（封面+目录）整体跳过
 
 
+def _filter_garbage(content_list: list[dict]) -> list[dict]:
+    """过滤掉垃圾内容：封面、目录、CIP 数据等。
 
-def extract_knowledge_units(
-        content_list: list[dict],
-        document_id: str,
-        kp_id: str,
-        *,
-        max_tokens: int = 512,
-        overlap: int = 50,
-) -> list[dict]:
-    """按标题层级分为 KnowledgeUnits
-
-    :param content_list: MinerU 或 DOCX 解析器的结构化输出
-    :param document_id: Document UUID
-    :param kp_id:  KnowledgePoint UUID（默认用根节点，后续 kp_splitter 再分配）
-    :param max_tokens: 每单元最大 token 数
-    :param overlap: 切分重叠字数
-    :return: List[dict]，可直接用于 KnowledgeUnit INSERT。
+    三步过滤：
+      1. 跳过 GARBAGE_PAGE_RANGE 范围内的页面（仅当文档有超出范围的正文页时）
+      2. 跳过匹配 GARBAGE_PATTERNS 的文本行
+      3. 跳过空文本
     """
-    blocks = _split_by_headings(content_list)
-    units: list[dict] = []
-    seq = 0
-    for block in blocks:
-        chunks = _split_text(block["text"], max_tokens=max_tokens, overlap=overlap)
-        for chunk in chunks:
-            seq += 1
-            units.append({
-                "kp_id": kp_id,
-                "document_id": document_id,
-                "content": chunk,
-                "summary": None,
-                "seq_order": seq,
-                "page_ref": block.get("page_ref", ""),
-                "meta_data": block.get("meta_data", {}),
-            })
+    min_page, max_page = GARBAGE_PAGE_RANGE
+    garbage_re = re.compile("|".join(GARBAGE_PATTERNS))
 
-    return units
+    # 仅当文档存在超出垃圾页范围的正文时才启用页码过滤，
+    # 避免 DOCX 等无页码文件被整本过滤掉
+    all_pages = {item.get("page_idx", 0) for item in content_list}
+    has_content_pages = any(p > max_page for p in all_pages)
+    skip_front_matter = has_content_pages
+
+    filtered: list[dict] = []
+    for item in content_list:
+        page = item.get("page_idx", 0)
+        text = item.get("text", "").strip()
+
+        if not text:
+            continue
+
+        # 跳过封面/目录页（仅在文档有正文页时生效）
+        if skip_front_matter and min_page <= page <= max_page:
+            continue
+
+        # 跳过 CIP 等出版信息
+        if garbage_re.match(text):
+            continue
+
+        filtered.append(item)
+
+    return filtered
+
+
+# ── A1: 标题分块（追踪 heading） ────────────────────────────
 
 
 def _split_by_headings(content_list: list[dict]) -> list[dict]:
-    """按标题层级将 content_list 聚合为文本块"""
+    """按标题层级将 content_list 聚合为文本块。
+
+    text_level ≤ 4 视为标题边界，触发新 block。
+    追踪当前标题文本，写入 meta_data["heading"]。
+    """
     blocks: list[dict] = []
     current: list[str] = []
-    current_meta: dict = {"text_level": 99} # 当前块最近的元数据（用于记录标题层级）
-    current_pages: set[int] = set()         # 当前块涉及的页码集合（用于去重记录页码范围）
+    current_heading: str = "未知章节"
+    current_text_level: int = 99
+    current_pages: set[int] = set()
 
     for item in content_list:
         text = item.get("text", "").strip()
         if not text:
-            continue    # 跳过空行
-        level = item.get("text_level", 99)  # 若无层级，默认为最底层99
-        page = item.get("page_idx", 0)      # MinerU 输出的页码从 0 开始
+            continue
 
-        # 遇到标题（level ≤9 均为标题），且当前缓存区有内容，则打包成一个 block
-        # level 99 或无 level = 正文，不触发切分
-        if level <= 9 and current:
-            blocks.append({
-                "text": "\n".join(current),
-                "page_ref": _format_page_ref(sorted(current_pages)),
-                "meta_data": {"text_level": current_meta.get("text_level", 99)}
-            })
+        level = item.get("text_level", 99)
+        page = item.get("page_idx", 0)
+
+        # text_level ≤ 4 触发新 block
+        if level <= 4 and current:
+            blocks.append(
+                {
+                    "text": "\n".join(current),
+                    "page_ref": _format_page_ref(sorted(current_pages)),
+                    "meta_data": {
+                        "text_level": current_text_level,
+                        "heading": current_heading,
+                    },
+                }
+            )
             current = []
             current_pages = set()
 
-        # 将当前行加入缓存区
+        # 更新当前标题
+        if level <= 4:
+            current_heading = text
+
         current.append(text)
-        current_meta = item
+        current_text_level = level
         current_pages.add(page)
 
-    # 处理循环结束后，缓冲区中剩余的最后一个块
+    # 最后一个 block
     if current:
-        blocks.append({
-            "text": "\n".join(current),
-            "page_ref": _format_page_ref(sorted(current_pages)),
-            "meta_data": {"text_level": current_meta.get("text_level")}
-        })
+        blocks.append(
+            {
+                "text": "\n".join(current),
+                "page_ref": _format_page_ref(sorted(current_pages)),
+                "meta_data": {
+                    "text_level": current_text_level,
+                    "heading": current_heading,
+                },
+            }
+        )
 
     return blocks
 
-def _split_text(text: str, * , max_tokens: int, overlap: int) -> list[str]:
-    """按token数切分文本，带重叠"""
-    chunk_size = int(max_tokens * 1.5)
-    step = chunk_size - overlap
-    if len(text) <= chunk_size:
+
+# ── A3: 数学块感知的文本切分 ────────────────────────────────
+
+
+def _find_math_ranges(text: str) -> list[tuple[int, int]]:
+    """找到所有 $$...$$ 数学块的范围（不可切分区域）。"""
+    ranges: list[tuple[int, int]] = []
+    i = 0
+    while True:
+        start = text.find("$$", i)
+        if start == -1:
+            break
+        end = text.find("$$", start + 2)
+        if end == -1:
+            # 未闭合的 $$，从 start 到末尾
+            ranges.append((start, len(text)))
+            break
+        ranges.append((start, end + 2))
+        i = end + 2
+    return ranges
+
+
+def _find_inline_math_ranges(text: str) -> list[tuple[int, int]]:
+    """找到所有 $...$ 内联公式的范围（跳过 $$）。"""
+    ranges: list[tuple[int, int]] = []
+    i = 0
+    while True:
+        start = text.find("$", i)
+        if start == -1:
+            break
+        if text[start : start + 2] == "$$":
+            i = start + 2
+            continue
+        end = text.find("$", start + 1)
+        if end == -1:
+            break
+        ranges.append((start, end + 1))
+        i = end + 1
+    return ranges
+
+
+def _is_inside_protected(pos: int, ranges: list[tuple[int, int]]) -> bool:
+    """检查位置是否在受保护的数学范围内（不含边界）。"""
+    for s, e in ranges:
+        if s < pos < e:
+            return True
+    return False
+
+
+def _split_text_v2(
+    text: str,
+    target_chars: int = 800,
+    hard_lower: int = 400,
+    hard_upper: int = 1200,
+) -> list[str]:
+    """数学块感知的文本切分器。
+
+    策略（按优先级）：
+      1. 优先在段落边界（双换行 \\n\\n）切分
+      2. 次优在句边界（。！？后跟换行）切分
+      3. 兜底在句号处切分
+      4. 强制在 hard_upper 切分（避开数学块内部）
+
+    目标 ~800 字符/unit，硬下限 400，硬上限 1200。
+    """
+    if len(text) <= hard_upper:
         return [text]
+
+    math_ranges = _find_math_ranges(text)
+    inline_ranges = _find_inline_math_ranges(text)
+    all_protected = math_ranges + inline_ranges
+
     chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        start += step
+    pos = 0
+
+    while pos < len(text):
+        remaining = len(text) - pos
+        if remaining <= hard_upper:
+            chunks.append(text[pos:])
+            break
+
+        search_start = pos + hard_lower
+        search_end = min(pos + hard_upper, remaining + pos)
+        best_split: int | None = None
+
+        # 优先级 1：段落边界（双换行）
+        for i in range(search_start, search_end - 1):
+            if text[i : i + 2] == "\n\n" and not _is_inside_protected(i, all_protected):
+                best_split = i + 1  # 保留一个换行在当前 chunk 末尾
+                break
+
+        # 优先级 2：句边界（。！？后跟换行）
+        if best_split is None:
+            for i in range(search_start, search_end):
+                if text[i] in "。！？" and not _is_inside_protected(i, all_protected):
+                    if i + 1 >= len(text) or text[i + 1] in "\n":
+                        best_split = i + 1
+                        break
+
+        # 优先级 3：任意句号（即使在行中）
+        if best_split is None:
+            for i in range(search_start, search_end):
+                if text[i] in "。！？" and not _is_inside_protected(i, all_protected):
+                    best_split = i + 1
+                    break
+
+        # 优先级 4：强制切分（避开数学块内部）
+        if best_split is None:
+            best_split = search_end
+            while _is_inside_protected(best_split, all_protected) and best_split > pos:
+                best_split -= 1
+
+        chunks.append(text[pos:best_split].strip())
+        pos = best_split
+
     return chunks
+
+
+# ── 页码格式化 ─────────────────────────────────────────────
 
 
 def _format_page_ref(pages: list[int]) -> str:
@@ -103,8 +248,64 @@ def _format_page_ref(pages: list[int]) -> str:
         return ""
     if len(pages) == 1:
         return f"p{pages[0] + 1}"
-
-    # 连续页码展示起止页
     return f"p{pages[0] + 1}-{pages[-1] + 1}"
 
 
+# ── 主入口 ─────────────────────────────────────────────────
+
+
+def extract_knowledge_units(
+    content_list: list[dict],
+    document_id: str,
+    kp_id: str,
+    *,
+    target_chars: int = 800,
+    hard_lower: int = 400,
+    hard_upper: int = 1200,
+) -> list[dict]:
+    """按标题层级分为 KnowledgeUnits。
+
+    流程：
+      1. _filter_garbage       ← A2: 垃圾过滤
+      2. _split_by_headings    ← A1: 标题分块 + heading 追踪
+      3. _split_text_v2        ← A3: 数学块感知切分
+
+    :param content_list: MinerU / DOCX / MD 解析器的结构化输出
+    :param document_id: Document UUID
+    :param kp_id: KnowledgePoint UUID（默认用根节点，后续 kp_splitter 再分配）
+    :param target_chars: 每 unit 目标字符数
+    :param hard_lower: 切分硬下限
+    :param hard_upper: 切分硬上限
+    :return: List[dict]，可直接用于 KnowledgeUnit INSERT。
+    """
+    # A2: 垃圾过滤
+    filtered = _filter_garbage(content_list)
+
+    # A1: 标题分块（带 heading 追踪）
+    blocks = _split_by_headings(filtered)
+
+    # A3: 数学块感知切分
+    units: list[dict] = []
+    seq = 0
+    for block in blocks:
+        chunks = _split_text_v2(
+            block["text"],
+            target_chars=target_chars,
+            hard_lower=hard_lower,
+            hard_upper=hard_upper,
+        )
+        for chunk in chunks:
+            seq += 1
+            units.append(
+                {
+                    "kp_id": kp_id,
+                    "document_id": document_id,
+                    "content": chunk,
+                    "summary": None,
+                    "seq_order": seq,
+                    "page_ref": block.get("page_ref", ""),
+                    "meta_data": block.get("meta_data", {}),
+                }
+            )
+
+    return units
