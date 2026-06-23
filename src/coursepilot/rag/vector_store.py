@@ -21,7 +21,8 @@ from coursepilot.rag.config import config
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "knowledge_units"
-DIM = config.dim    # 1024
+DIM = config.dim  # 1024
+
 
 class VectorStore:
     """
@@ -76,7 +77,7 @@ class VectorStore:
             field_name="sparse_vec",
             index_type="SPARSE_INVERTED_INDEX",
             metric_type="IP",
-            params={"drop_ratio_build": 0.2}
+            params={"drop_ratio_build": 0.2},
         )
 
         self.client.create_collection(
@@ -179,7 +180,7 @@ class VectorStore:
         # 将 list 转换为 Milvus 支持的 filter 格式: uuid in ["u1", "u2"]
         # 注意字符串需要用双引号包裹
         uuid_str = ",".join([f'"{uid}"' for uid in uuids])
-        filter_expr = f'uuid in [{uuid_str}]'
+        filter_expr = f"uuid in [{uuid_str}]"
 
         self.client.delete(collection_name=COLLECTION_NAME, filter=filter_expr)
         logger.info("Milvus 删除 %d 条向量", len(uuids))
@@ -211,7 +212,3 @@ class VectorStore:
             filter=filter_expr,
             output_fields=["uuid", "kp_id", "kp_path", "content"],
         )
-
-
-
-
