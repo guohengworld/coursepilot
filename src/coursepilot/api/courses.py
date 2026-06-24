@@ -1,5 +1,6 @@
 """课程管理 API"""
 from uuid import UUID
+import time
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -41,6 +42,18 @@ class KPTreeNodeOut(BaseModel):
     title: str
     kp_path: str
     children: list["KPTreeNodeOut"] = []
+
+class AskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+
+
+class AskResponse(BaseModel):
+    answer: str
+    trace_id: str
+    rewritten_query: str
+    citations: list[int] = Field(description="引用的页面索引列表")
+    top_scores: list[float] = Field(description="相似度得分列表")
+    source_kp_paths: list[str] = Field(description="知识点路径列表")
 
 
 # 课程 CRUD
@@ -267,3 +280,106 @@ async def _get_course_or_404(session, course_id):
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     return course
+
+# ========== RAG 问答 ==========
+
+@router.post("/{course_id}/ask")
+async def ask_course(
+    course_id: UUID,
+    body: AskRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> AskResponse:
+    """RAG 问答：检索教材内容 → LLM 生成回答"""
+    from coursepilot.rag.retriever import Retriever
+    from coursepilot.rag.generator import Generator, build_course_context
+    from coursepilot.rag.citation import extract_citations
+    from coursepilot.rag.logger import QueryLogger
+
+    await _get_course_or_404(session, course_id)
+
+    qlogger = QueryLogger()
+    trace_id, t_start = qlogger.start_trace()
+    stages: dict[str, float] = {}
+
+    # 阶段 1-4：检索
+    t0 = time.time()
+    retriever = Retriever()
+    context, metadata = await retriever.retrieve(
+        session, body.question, str(course_id)
+    )
+    stages["retrieve_ms"] = round((time.time() - t0) * 1000, 1)
+
+    # 课程上下文
+    course_context = await build_course_context(session, course_id)
+
+    # 阶段 5：LLM 生成
+    t0 = time.time()
+    generator = Generator()
+    answer = await generator.generate(body.question, context, course_context)
+    stages["generate_ms"] = round((time.time() - t0) * 1000, 1)
+
+    # 引用提取
+    citations = extract_citations(answer)
+
+    # 结构化日志
+    qlogger.log_query(
+        trace_id=trace_id,
+        user_id=str(user.id),
+        course_id=str(course_id),
+        query_raw=body.question,
+        query_rewritten=metadata["query_rewritten"],
+        stages=stages,
+        top_rerank_scores=metadata["top_rerank_scores"],
+        source_kp_paths=metadata["source_kp_paths"],
+        citation_count=len(citations),
+        answer_length=len(answer),
+    )
+
+    return AskResponse(
+        answer=answer,
+        trace_id=trace_id,
+        rewritten_query=metadata["query_rewritten"],
+        citations=citations,
+        top_scores=metadata["top_rerank_scores"],
+        source_kp_paths=metadata["source_kp_paths"],
+    )
+
+@router.post("/{course_id}/ask/stream")
+async def ask_course_stream(
+    course_id: UUID,
+    body: AskRequest,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """RAG 问答（SSE 流式输出）"""
+    from coursepilot.rag.retriever import Retriever
+    from coursepilot.rag.generator import Generator, build_course_context
+    from fastapi.responses import StreamingResponse
+
+    await _get_course_or_404(session, course_id)
+
+    retriever = Retriever()
+    context, _metadata = await retriever.retrieve(
+        session, body.question, str(course_id)
+    )
+
+    course_context = await build_course_context(session, course_id)
+    generator = Generator()
+
+    async def event_stream():
+        async for token in generator.generate_stream(
+            body.question, context, course_context
+        ):
+            yield f"data: {token}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+

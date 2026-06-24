@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.config import settings
-from coursepilot.models import Course, KnowledgePoint
+from coursepilot.models import Course, KnowledgePoint, Document
 
 logger = logging.getLogger(__name__)
 
@@ -166,8 +166,16 @@ async def build_course_context(
 
     chapters = [kp.title for kp in kp_list if kp.parent_id is None]
 
+    # 从 Document 表取教材名称（Course 模型无 textbook 字段）
+    doc_result = await session.execute(
+        select(Document.filename)
+        .where(Document.course_id == course_id)
+        .limit(1)
+    )
+    textbook = doc_result.scalar_one_or_none() or "未知教材"
+
     return {
         "name": course.name,
-        "textbook": course.textbook or "未知教材",
+        "textbook": textbook,
         "chapters": chapters,
     }
