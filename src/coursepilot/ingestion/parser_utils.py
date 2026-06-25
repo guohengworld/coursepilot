@@ -233,6 +233,10 @@ def _split_text_v2(
             while _is_inside_protected(best_split, all_protected) and best_split > pos:
                 best_split -= 1
 
+        # 兜底：防止全数学区域导致 best_split ≤ pos 引发死循环
+        if best_split <= pos:
+            best_split = min(pos + hard_upper, len(text))
+
         chunks.append(text[pos:best_split].strip())
         pos = best_split
 
@@ -278,13 +282,22 @@ def extract_knowledge_units(
     :param hard_upper: 切分硬上限
     :return: List[dict]，可直接用于 KnowledgeUnit INSERT。
     """
+    import logging, time
+    _log = logging.getLogger(__name__)
+
+    t0 = time.time()
+
     # A2: 垃圾过滤
     filtered = _filter_garbage(content_list)
+    _log.info("  _filter_garbage: %d → %d 行 (%.1fs)", len(content_list), len(filtered), time.time() - t0)
 
     # A1: 标题分块（带 heading 追踪）
+    t1 = time.time()
     blocks = _split_by_headings(filtered)
+    _log.info("  _split_by_headings: %d blocks (%.1fs)", len(blocks), time.time() - t1)
 
     # A3: 数学块感知切分
+    t2 = time.time()
     units: list[dict] = []
     seq = 0
     for block in blocks:
@@ -307,5 +320,6 @@ def extract_knowledge_units(
                     "meta_data": block.get("meta_data", {}),
                 }
             )
+    _log.info("  _split_text_v2: %d units (%.1fs)", len(units), time.time() - t2)
 
     return units

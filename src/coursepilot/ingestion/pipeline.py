@@ -85,11 +85,13 @@ async def run_ingestion(
         #   A3: _split_text_v2 数学块感知 + 段落边界优先
         from coursepilot.ingestion.parser_utils import extract_knowledge_units
 
+        logger.info("B2: 切分知识单元（%d 行 content_list）...", len(content_list))
         units = extract_knowledge_units(
             content_list,
             document_id=str(doc.id),
             kp_id="",  # 暂时为空，下面由 KPSplitter 分配
         )
+        logger.info("B2: 切分完成 → %d 个知识单元", len(units))
 
         # ── B3: 用知识点树分配 kp_id ────────────────────
         kp_result = await session.execute(
@@ -107,17 +109,26 @@ async def run_ingestion(
             for kp in kp_result.scalars()
         ]
 
+        logger.info("B3: KP 分配（%d 个 KP 节点）...", len(kp_nodes))
         if kp_nodes:
             from coursepilot.knowledge.kp_splitter import KPSplitter
 
             splitter = KPSplitter(kp_nodes, str(doc.course_id))
             units = splitter.assign(units)
+        logger.info("B3: KP 分配完成")
 
         # ── B6: SummaryBridge 生成摘要（阶段 A 新增） ────
         from coursepilot.rag.summary_bridge import SummaryBridge
 
+        logger.info("B6: 开始生成摘要（%d 个 unit）...", len(units))
         bridge = SummaryBridge()
         units = await bridge.run(units)
+        logger.info("B6: 摘要生成完成")
+
+        # 回填 kp_path 到 units（Milvus 入库需要）
+        kp_map = {n["id"]: n["kp_path"] for n in kp_nodes}
+        for u in units:
+            u["kp_path"] = kp_map.get(u.get("kp_id", ""), "")
 
         # ── B7: encode + Milvus insert（阶段 B 实施） ────
         await _encode_units(units, str(doc.course_id))
@@ -165,25 +176,25 @@ async def _encode_units(units: list[dict], course_id: str) -> None:
     for u in units:
         u["_unit_id"] = str(uuid4())
 
-        # 批量编码
-        contents = [u["content"] for u in units]
-        vecs = encoder.encode(contents)
+    # 批量编码
+    contents = [u["content"] for u in units]
+    vecs = encoder.encode(contents)
 
-        # 构建 Milvus 插入数据
-        payloads = []
-        for u, vec in zip(units, vecs):
-            payloads.append({
-                "uuid": u["_unit_id"],
-                "dense_vec": vec["dense"],
-                "sparse_vec": vec["sparse"],
-                "kp_id": u.get("kp_id", ""),
-                "course_id": course_id,
-                "kp_path": u.get("kp_path", ""),
-                "content": u["content"][:8192],
-            })
+    # 构建 Milvus 插入数据
+    payloads = []
+    for u, vec in zip(units, vecs):
+        payloads.append({
+            "uuid": u["_unit_id"],
+            "dense_vec": vec["dense"],
+            "sparse_vec": vec["sparse"],
+            "kp_id": u.get("kp_id", ""),
+            "course_id": course_id,
+            "kp_path": u.get("kp_path", ""),
+            "content": u["content"][:8192],
+        })
 
-        store.insert(payloads)
-        logger.info("B7 encode_units: %d units encoded + inserted to Milvus", len(units))
+    store.insert(payloads)
+    logger.info("B7 encode_units: %d units encoded + inserted to Milvus", len(units))
 
 
 
