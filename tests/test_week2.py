@@ -381,7 +381,7 @@ class TestHeadingsToSyllabus:
     """测试教材标题列表 → 知识点节点（seed_knowledge 核心逻辑）"""
 
     def test_basic(self):
-        from scripts.seed_knowledge import headings_to_syllabus
+        from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
         headings = [
             {"title": "进程管理", "level": 1, "page_idx": 0},
             {"title": "进程调度", "level": 2, "page_idx": 1},
@@ -396,7 +396,7 @@ class TestHeadingsToSyllabus:
         assert nodes[3]["parent_title"] == "进程调度"
 
     def test_two_sections(self):
-        from scripts.seed_knowledge import headings_to_syllabus
+        from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
         headings = [
             {"title": "数学",     "level": 1, "page_idx": 0},
             {"title": "代数",     "level": 2, "page_idx": 1},
@@ -413,19 +413,19 @@ class TestHeadingsToSyllabus:
         ]
 
     def test_single_heading(self):
-        from scripts.seed_knowledge import headings_to_syllabus
+        from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
         nodes = headings_to_syllabus([{"title": "总论", "level": 1, "page_idx": 0}], "BK")
         assert len(nodes) == 1
         assert nodes[0]["kp_path"] == "BK/总论"
         assert nodes[0]["parent_title"] is None
 
     def test_empty(self):
-        from scripts.seed_knowledge import headings_to_syllabus
+        from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
         assert headings_to_syllabus([], "X") == []
 
     def test_level_jump(self):
         """从 level 1 直接跳到 level 3（跳过 level 2）"""
-        from scripts.seed_knowledge import headings_to_syllabus
+        from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
         headings = [
             {"title": "章",   "level": 1, "page_idx": 0},
             {"title": "小节", "level": 3, "page_idx": 1},
@@ -435,7 +435,7 @@ class TestHeadingsToSyllabus:
         assert nodes[1]["kp_path"] == "BK/章/小节"
 
     def test_sort_order(self):
-        from scripts.seed_knowledge import headings_to_syllabus
+        from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
         headings = [
             {"title": "A", "level": 1, "page_idx": 0},
             {"title": "B", "level": 2, "page_idx": 1},

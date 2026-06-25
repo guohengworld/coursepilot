@@ -122,7 +122,7 @@ async def test_real_pipeline():
     # A3. 构建知识点节点（kp_path）
     _step(3, "构建知识点节点（title → kp_path 层级）")
 
-    from scripts.seed_knowledge import headings_to_syllabus
+    from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
 
     kp_nodes = headings_to_syllabus(headings, COURSE_NAME)
     print(f"  构建 {len(kp_nodes)} 个知识点节点：")

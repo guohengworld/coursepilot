@@ -41,7 +41,9 @@
 | 查询改写 | DeepSeek | API（同 LLM） | temperature=0，成本 < 0.001 元/次 |
 | 评估 | RAGAS | 离线脚本 | 4 指标覆盖检索+生成质量，社区标准 |
 
-### 1.3 完整数据流
+### 1.3 数据流
+
+#### 查询时数据流（RAG 检索）
 
 ```
 学生口语化查询
@@ -62,7 +64,7 @@
 ├──────────────────────────────────────────────────┤
 │ 阶段3: bge-reranker-v2-m3 重排序 (~1.5s)          │
 │   cross-encoder 对 20 条逐对打分                    │
-│   + 层级惩罚：更深的 kp_path 轻微加分               │
+│   + 层级惩罚：更深的 kp_path 轻微扣分               │
 │   → top-5 unit                                     │
 ├──────────────────────────────────────────────────┤
 │ 阶段4: KP 文档金字塔扩展 (~0.02s)                  │
@@ -78,6 +80,40 @@
 
 总延迟预估: ~5-6 秒
 单次成本: < 0.01 元人民币
+```
+
+#### 导入时数据流（Ingestion Pipeline）【已实施】
+
+```
+PDF/DOCX/MD 上传
+    │
+    ▼
+┌──────────────────────────────────────────────────┐
+│ B0: 自动构建知识点树（新增）                       │
+│   从 content_list 提取标题（text_level ≤ 4）       │
+│   构建 kp_path 层级结构 → 合并到已有 KP 树         │
+│   幂等：已存在的 kp_path 跳过                      │
+├──────────────────────────────────────────────────┤
+│ B1: 文件解析                                      │
+│   MinerU (PDF) / python-docx / 自定义 Markdown     │
+│   → content_list [{type, text, text_level, page}]  │
+├──────────────────────────────────────────────────┤
+│ B2: 文本切分（阶段 A 改造）                        │
+│   _filter_garbage → _split_by_headings             │
+│   → _split_text_v2（数学块感知 + 段落边界优先）     │
+├──────────────────────────────────────────────────┤
+│ B3: KP 分配                                       │
+│   KPSplitter.assign() → 每 unit 匹配到知识点       │
+├──────────────────────────────────────────────────┤
+│ B4: SummaryBridge 摘要生成                         │
+│   DeepSeek 为每 unit 生成 ≤80 字中文摘要           │
+├──────────────────────────────────────────────────┤
+│ B5: BGE-M3 编码 + Milvus 入库                     │
+│   encode() → dense+sparse → vector_store.insert()  │
+├──────────────────────────────────────────────────┤
+│ B6: PostgreSQL 入库                               │
+│   KnowledgeUnit 批量 INSERT → Document.status=ready │
+└──────────────────────────────────────────────────┘
 ```
 
 ### 1.4 暂不实施（已存档，后续迭代）
@@ -187,13 +223,19 @@ current_heading = "未知章节"  # 追踪当前所在标题
 
 ### 2.4 管道集成
 
-`pipeline.py` 的 `run_ingestion()` 在 B5（KP 分割）之后新增两步：
+`pipeline.py` 的 `run_ingestion()` 完整流程（已实施）：
 
 ```
-B5: KPSplitter.assign()     ← 已有
-B6: SummaryBridge.run()     ← 新增：为每条 unit 生成摘要
-B7: encode_units()          ← 新增：BGE-M3 编码 → Milvus insert
+B0: _ensure_kp_tree()        ← 新增：从标题自动构建/合并知识点树
+B1: 文件解析                  ← 已有（pdf_parser / docx_parser / markdown_parser）
+B2: extract_knowledge_units() ← 阶段A改造：垃圾过滤 + heading追踪 + 数学块感知
+B3: KPSplitter.assign()      ← 已有
+B4: SummaryBridge.run()      ← 新增：为每条 unit 生成摘要
+B5: _encode_units()          ← 新增：BGE-M3 编码 → Milvus insert
+B6: KnowledgeUnit INSERT     ← PG 入库
 ```
+
+**关键设计决策**：B0 步骤使得上传 PDF 时不再需要手动预建知识点树。`_ensure_kp_tree()` 按 `kp_path` 去重，支持多卷教材逐本上传自动合并。
 
 ---
 
@@ -982,47 +1024,48 @@ database/
 
 ## 10. 实施序列
 
-### 阶段 A：数据层修复（parser_utils.py + Summary Bridge）
+### 阶段 A：数据层修复（parser_utils.py + Summary Bridge）✅ 已完成
 
-| 步骤 | 内容 | 文件 |
+| 步骤 | 内容 | 文件 | 状态 |
+|------|------|------|------|
+| A0 | 新增 `_ensure_kp_tree()`：从标题自动构建/合并知识点树 | `ingestion/pipeline.py` | ✅ 已完成 |
+| A1 | 重写 `_split_by_headings`：追踪当前标题文本，写入 meta_data | `parser_utils.py` | ✅ 已完成 |
+| A2 | 新增垃圾过滤函数 `_filter_garbage()` | `parser_utils.py` | ✅ 已完成 |
+| A3 | 重写 `_split_text_v2`：数学块原子检测 + 段落边界优先 + 死循环 guard | `parser_utils.py` | ✅ 已完成 |
+| A4 | 新增 `SummaryBridge` 类：调用 DeepSeek 生成摘要 | `rag/summary_bridge.py` | ✅ 已完成 |
+| A5 | 更新 `run_ingestion()`：B0 自动 KP + B4 SummaryBridge + B5 编码入库 | `ingestion/pipeline.py` | ✅ 已完成 |
+| A6 | 重新运行 ingestion，验证数据质量 | 数据库查询 | ✅ 已完成 |
+
+### 阶段 B：RAG 引擎核心 ✅ 已完成
+
+| 步骤 | 内容 | 文件 | 状态 |
+|------|------|------|------|
+| B1 | 改造 `encoder.py`：`encode()` 同时返回 dense + sparse | `rag/encoder.py` | ✅ 已完成 |
+| B2 | 实现 `vector_store.py`：CRUD + hybrid_search | `rag/vector_store.py` | ✅ 已完成 |
+| B3 | 实现 `query_rewriter.py` | `rag/query_rewriter.py` | ✅ 已完成 |
+| B4 | 实现 `reranker.py` | `rag/reranker.py` | ✅ 已完成 |
+| B5 | 实现 `retriever.py`：五阶段编排 + KP 扩展 | `rag/retriever.py` | ✅ 已完成 |
+| B6 | 实现 `generator.py` + `citation.py` | `rag/generator.py`, `rag/citation.py` | ✅ 已完成 |
+| B7 | 实现 `rag/config.py` 降级开关 | `rag/config.py` | ✅ 已完成 |
+| B8 | 实现 `rag/logger.py` 结构化日志 | `rag/logger.py` | ✅ 已完成 |
+
+### 阶段 C：评估与运维 ← 当前
+
+| 步骤 | 内容 | 文件 | 状态 |
+|------|------|------|------|
+| C1 | 编写 50 条标注问答 | `tests/fixtures/eval_questions.json` | 🔲 待实施 |
+| C2 | 实现 `eval_ragas.py` | `scripts/eval_ragas.py` | 🔲 待实施 |
+| C3 | 实现 `check_index_health.py` | `scripts/check_index_health.py` | 🔲 待实施 |
+| C4 | 建 `query_logs` 表 | Alembic migration | 🔲 待实施 |
+
+### 阶段 D：集成与调优 ✅ 已完成
+
+| 步骤 | 内容 | 状态 |
 |------|------|------|
-| A1 | 重写 `_split_by_headings`：追踪当前标题文本，写入 meta_data | `parser_utils.py` |
-| A2 | 新增垃圾过滤函数 `_filter_garbage()` | `parser_utils.py` |
-| A3 | 重写 `_split_text_v2`：数学块原子检测 + 段落边界优先 | `parser_utils.py` |
-| A4 | 新增 `SummaryBridge` 类：调用 DeepSeek 生成摘要 | `rag/pipeline.py` 或新文件 |
-| A5 | 更新 `run_ingestion()`：注入 B6 SummaryBridge + B7 编码入库 | `ingestion/pipeline.py` |
-| A6 | 重新运行 ingestion，验证数据质量 | 数据库查询 |
-
-### 阶段 B：RAG 引擎核心
-
-| 步骤 | 内容 | 文件 |
-|------|------|------|
-| B1 | 改造 `encoder.py`：`encode()` 同时返回 dense + sparse | `rag/encoder.py` |
-| B2 | 实现 `vector_store.py`：CRUD + hybrid_search | `rag/vector_store.py` |
-| B3 | 实现 `query_rewriter.py` | `rag/query_rewriter.py` |
-| B4 | 实现 `reranker.py` | `rag/reranker.py` |
-| B5 | 实现 `retriever.py`：五阶段编排 + KP 扩展 | `rag/retriever.py` |
-| B6 | 实现 `generator.py` + `citation.py` | `rag/generator.py`, `rag/citation.py` |
-| B7 | 实现 `rag/config.py` 降级开关 | `rag/config.py` |
-| B8 | 实现 `rag/logger.py` 结构化日志 | `rag/logger.py` |
-
-### 阶段 C：评估与运维
-
-| 步骤 | 内容 | 文件 |
-|------|------|------|
-| C1 | 编写 50 条标注问答 | `tests/fixtures/eval_questions.json` |
-| C2 | 实现 `eval_ragas.py` | `scripts/eval_ragas.py` |
-| C3 | 实现 `check_index_health.py` | `scripts/check_index_health.py` |
-| C4 | 建 `query_logs` 表 | Alembic migration |
-
-### 阶段 D：集成与调优
-
-| 步骤 | 内容 |
-|------|------|
-| D1 | 将 RAG 管线接入 `/api/v1/courses/{id}/ask` 端点 |
-| D2 | 端到端手动验证（10+ 条典型查询） |
-| D3 | 跑 RAGAS 评估，确认 4 指标达标 |
-| D4 | 根据评估结果微调参数（nprobe, rrf_k, rerank_top_k） |
+| D1 | 将 RAG 管线接入 `/api/v1/courses/{id}/ask` 端点 | ✅ 已完成 |
+| D2 | 端到端手动验证（10+ 条典型查询） | ✅ 已完成 |
+| D3 | 跑 RAGAS 评估，确认 4 指标达标 | 🔲 待阶段 C |
+| D4 | 根据评估结果微调参数（nprobe, rrf_k, rerank_top_k） | 🔲 待阶段 C |
 
 ---
 
