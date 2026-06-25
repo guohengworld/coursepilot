@@ -59,6 +59,7 @@ class SummaryBridge:
             base_url=self.base_url,
         )
 
+        total = len(units)
         for i, unit in enumerate(units):
             if unit.get("summary"):
                 continue
@@ -79,17 +80,15 @@ class SummaryBridge:
                     ],
                     temperature=0,
                     max_tokens=120,
+                    timeout=30.0,
                 )
                 summary = response.choices[0].message.content.strip()
                 unit["summary"] = summary
-                logger.debug("SummaryBridge [%d/%d]: %s", i + 1, len(units), summary[:60])
+                if (i + 1) % 20 == 0 or i == 0:
+                    print(f"     📝 SummaryBridge [{i+1}/{total}]: {summary[:60]}...")
             except Exception:
-                logger.warning(
-                    "SummaryBridge [%d/%d] failed for unit",
-                    i + 1,
-                    len(units),
-                    exc_info=True,
-                )
+                if (i + 1) % 20 == 0 or i == 0:
+                    print(f"     ⚠ SummaryBridge [{i+1}/{total}] 失败，继续...")
                 unit["summary"] = ""
 
         return units

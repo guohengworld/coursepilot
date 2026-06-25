@@ -10,6 +10,7 @@ BGE-M3 编码器 —— 一次 forward 同时输出 dense + learned sparse 向�
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from coursepilot.config import settings
 from coursepilot.rag.config import config
@@ -21,6 +22,8 @@ _encoder_instance = None
 
 def _load_model():
     """惰性加载 BGE-M3 模型（CPU 推理）"""
+    print(f"[DEBUG] embedding_model_path = '{settings.embedding_model_path}'")  # ← 加这行
+    print(f"[DEBUG] 目录是否存在: {Path(settings.embedding_model_path).exists()}")
     try:
         from FlagEmbedding import BGEM3FlagModel
 
