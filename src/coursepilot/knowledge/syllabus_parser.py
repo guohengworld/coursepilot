@@ -3,9 +3,9 @@
 输入支持：
   1. Markdown：# 章 / ## 节 / ### 小节 / #### 细则
   2. 中文编号：第一章 / 第一节 / 一、 / 1. / (1)
+  3. PDF 解析后的 content_list（text_level ≤ 4 的标题行）
 
-输出: List[SyllabusNode]，每个含 title, level, children, kp_path, sort_order
-      可直接展平后批量插入 knowledge_points 表。
+输出: List[SyllabusNode] 或 List[dict]，可直接批量插入 knowledge_points 表。
 
 如果有这段文本：
 # 内存管理
@@ -130,4 +130,70 @@ class SyllabusParser:
 
         # 3) 非标题
         return "", 99
+
+
+# ── 模块级工具函数：从 content_list 提取标题 → 构建 KP 节点 ──
+
+
+def extract_headings(content_list: list[dict]) -> list[dict]:
+    """从解析后的 content_list 中提取标题行（text_level ≤ 4）。
+
+    返回: [{"title": str, "level": int, "page_idx": int}, ...]
+    """
+    headings: list[dict] = []
+    for item in content_list:
+        level = item.get("text_level", 99)
+        if level and level <= 4:
+            headings.append({
+                "title": item.get("text", "").strip(),
+                "level": level,
+                "page_idx": item.get("page_idx", 0),
+            })
+    return headings
+
+
+def headings_to_syllabus(headings: list[dict], course_name: str) -> list[dict]:
+    """将标题列表转换为知识点节点列表（含 kp_path + parent_title）。
+
+    用栈维护层级关系，输出可直接用于 KPTree.create_from_nodes() 或手动 INSERT。
+
+    返回: [{"title", "level", "kp_path", "parent_title", "sort_order", "summary", "difficulty", "source"}, ...]
+    """
+    stack: list[dict] = []
+    result: list[dict] = []
+    counters: dict[int, int] = {}
+
+    for h in headings:
+        title = h["title"]
+        level = h["level"]
+        if not title:
+            continue
+
+        while stack and stack[-1]["level"] >= level:
+            stack.pop()
+
+        counters[level] = counters.get(level, 0) + 1
+
+        if stack:
+            parent = stack[-1]
+            kp_path = parent["kp_path"] + "/" + title
+            parent_title = parent["title"]
+        else:
+            kp_path = course_name + "/" + title
+            parent_title = None
+
+        node = {
+            "title": title,
+            "level": level,
+            "kp_path": kp_path,
+            "parent_title": parent_title,
+            "sort_order": counters[level],
+            "summary": "",
+            "difficulty": 1,
+            "source": "textbook",
+        }
+        result.append(node)
+        stack.append(node)
+
+    return result
 

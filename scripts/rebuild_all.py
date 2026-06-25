@@ -66,7 +66,7 @@ COURSE_PDFS: dict[str, list[str]] = {
 # 辅助：解析文件（复用 seed_knowledge 的函数）
 # ═══════════════════════════════════════════════════════════════
 
-from scripts.seed_knowledge import parse_file, headings_to_syllabus
+from scripts.seed_knowledge import parse_file
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -153,8 +153,7 @@ async def process_course_full(
 
     # ── 完整模式：解析 PDF → 全套流程 ──
 
-    # 1. 解析所有 PDF，收集 content_list + headings
-    all_headings: list[dict] = []
+    # 1. 解析所有 PDF，收集 content_list
     pdf_data: list[dict] = []
 
     for pdf_name in pdf_names:
@@ -168,7 +167,7 @@ async def process_course_full(
         t0 = time.time()
 
         try:
-            content_list, headings = await parse_file(str(pdf_path))
+            content_list, _headings = await parse_file(str(pdf_path))
         except Exception as e:
             print(f"  ❌ 解析失败: {e}")
             stats["pdfs"].append({
@@ -177,25 +176,18 @@ async def process_course_full(
             continue
 
         elapsed = time.time() - t0
-        print(f"     ⏱ {elapsed:.0f}s | {len(content_list)} 行, {len(headings)} 个标题")
+        print(f"     ⏱ {elapsed:.0f}s | {len(content_list)} 行")
 
         pdf_data.append({
             "filename": pdf_name,
             "file_path": str(pdf_path),
             "file_size": pdf_path.stat().st_size,
             "content_list": content_list,
-            "headings": headings,
         })
-        all_headings.extend(headings)
 
     if not pdf_data:
         stats["error"] = "没有成功解析任何 PDF"
         return stats
-
-    # 2. 合并标题，构建知识点树
-    print(f"\n  🌳 构建知识点树（合并 {len(all_headings)} 个标题）...")
-    nodes = headings_to_syllabus(all_headings, course_name)
-    print(f"     {len(nodes)} 个知识点节点")
 
     # 3. 写入数据库
     async with get_session_etx() as session:
@@ -238,48 +230,13 @@ async def process_course_full(
         await session.flush()
         print(f"     🧹 已清除旧数据（KP + Document + Unit）")
 
-        # 3c. 插入知识点
-        title_to_id: dict[str, str] = {}
-        for node in nodes:
-            kp = KnowledgePoint(
-                course_id=course.id,
-                kp_path=node["kp_path"],
-                title=node["title"],
-                summary=node.get("summary", ""),
-                difficulty=node.get("difficulty", 1),
-                sort_order=node.get("sort_order", 0),
-                source=node.get("source", "textbook"),
-            )
-            session.add(kp)
-            await session.flush()
-            title_to_id[node["title"]] = str(kp.id)
-
-        # 回填 parent_id
-        for node in nodes:
-            if node["parent_title"] and node["parent_title"] in title_to_id:
-                kid = title_to_id[node["title"]]
-                pid = title_to_id[node["parent_title"]]
-                kp = await session.get(KnowledgePoint, kid)
-                if kp:
-                    kp.parent_id = pid
-        await session.flush()
-
-        # 验证 KP 入库数量
-        kp_result = await session.execute(
-            select(KnowledgePoint)
-            .where(KnowledgePoint.course_id == course.id)
-        )
-        kp_count = len(kp_result.scalars().all())
-        stats["total_kps"] = kp_count
-        print(f"     ✅ 知识点树入库: {kp_count} 个节点")
-
-        # 3d. 查找 uploader
+        # 3c. 查找 uploader
         r = await session.execute(
             select(User).where(User.role == "super").limit(1)
         )
         uploader = r.scalar_one()
 
-        # 3e. 为每卷 PDF 创建 Document → 调用 run_ingestion 复用标准管线
+        # 3d. 为每卷 PDF 创建 Document → 调用 run_ingestion（自动构建 KP 树）
         from coursepilot.ingestion.pipeline import run_ingestion
 
         for pd in pdf_data:
@@ -323,6 +280,16 @@ async def process_course_full(
                     "error": str(e),
                 })
                 print(f"     ❌ 失败: {e}")
+
+        # 统计 KP 数量（由 run_ingestion 自动构建）
+        from coursepilot.models import KnowledgePoint
+        kp_result = await session.execute(
+            select(KnowledgePoint)
+            .where(KnowledgePoint.course_id == course.id)
+        )
+        kp_count = len(kp_result.scalars().all())
+        stats["total_kps"] = kp_count
+        print(f"     ✅ 知识点树: {kp_count} 个节点（由管线自动构建）")
 
         # 统计 Milvus
         try:

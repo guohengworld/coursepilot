@@ -1,12 +1,13 @@
-"""Ingestion 管线：解析文件 → 切分 → KP 分配 → 摘要 → 入库
+"""Ingestion 管线：解析文件 → 自动构建 KP 树 → 切分 → KP 分配 → 摘要 → 入库
 
 流程：
   Document(status=pending)
     → 解析文件（pdf_parser / docx_parser）
-    → extract_knowledge_units 切分（阶段 A 改造：垃圾过滤 + heading 追踪 + 数学块感知）
+    → _ensure_kp_tree 从标题自动构建/合并知识点树（新增：无需手动预建 KP）
+    → extract_knowledge_units 切分（垃圾过滤 + heading 追踪 + 数学块感知）
     → KPSplitter 分配到知识点
-    → SummaryBridge 生成摘要（B6，阶段 A 新增）
-    → encode_units → Milvus（B7，阶段 B 实施）
+    → SummaryBridge 生成摘要
+    → encode_units → Milvus
     → Document（status=ready）
 """
 
@@ -19,9 +20,85 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from coursepilot.models import Document, KnowledgePoint, KnowledgeUnit
+from coursepilot.models import Course, Document, KnowledgePoint, KnowledgeUnit
 
 logger = logging.getLogger(__name__)
+
+
+async def _ensure_kp_tree(
+    session: AsyncSession,
+    course_id: UUID,
+    content_list: list[dict],
+) -> list[dict]:
+    """从 content_list 提取标题，自动构建/合并知识点树。
+
+    幂等：已存在的 kp_path 不重复创建，支持多卷教材逐本上传。
+    返回: KP 节点列表 [{id, title, kp_path, level}, ...]，供 KPSplitter 使用。
+    """
+    from coursepilot.knowledge.syllabus_parser import extract_headings, headings_to_syllabus
+
+    headings = extract_headings(content_list)
+    if not headings:
+        logger.info("B0: 未提取到标题（text_level ≤ 4），跳过 KP 树构建")
+        return []
+
+    course = await session.get(Course, course_id)
+    course_name = course.name if course else "未命名课程"
+
+    nodes = headings_to_syllabus(headings, course_name)
+    logger.info("B0: 从 %d 个标题构建 %d 个 KP 节点（课程: %s）", len(headings), len(nodes), course_name)
+
+    # 查询已有 KP，按 kp_path 去重
+    existing_result = await session.execute(
+        select(KnowledgePoint.kp_path)
+        .where(KnowledgePoint.course_id == course_id)
+    )
+    existing_paths = {row[0] for row in existing_result.fetchall()}
+
+    new_nodes = [n for n in nodes if n["kp_path"] not in existing_paths]
+    if not new_nodes:
+        logger.info("B0: 所有 KP 节点已存在，跳过插入")
+    else:
+        title_to_id: dict[str, str] = {}
+        for node in new_nodes:
+            kp = KnowledgePoint(
+                course_id=course_id,
+                kp_path=node["kp_path"],
+                title=node["title"],
+                summary=node.get("summary", ""),
+                difficulty=node.get("difficulty", 1),
+                sort_order=node.get("sort_order", 0),
+                source=node.get("source", "textbook"),
+            )
+            session.add(kp)
+            await session.flush()
+            title_to_id[node["title"]] = str(kp.id)
+            node["id"] = str(kp.id)
+
+        # 回填 parent_id
+        for node in new_nodes:
+            if node.get("parent_title") and node["parent_title"] in title_to_id:
+                kp = await session.get(KnowledgePoint, UUID(title_to_id[node["title"]]))
+                if kp:
+                    kp.parent_id = UUID(title_to_id[node["parent_title"]])
+        await session.flush()
+        logger.info("B0: 新增 %d 个 KP 节点（已存在 %d 个）", len(new_nodes), len(existing_paths))
+
+    # 返回完整 KP 列表（已有 + 新增）
+    all_kp_result = await session.execute(
+        select(KnowledgePoint)
+        .where(KnowledgePoint.course_id == course_id)
+        .order_by(KnowledgePoint.sort_order)
+    )
+    return [
+        {
+            "id": str(kp.id),
+            "title": kp.title,
+            "kp_path": kp.kp_path,
+            "level": _kp_level(kp.kp_path),
+        }
+        for kp in all_kp_result.scalars()
+    ]
 
 
 async def run_ingestion(
@@ -48,7 +125,7 @@ async def run_ingestion(
     await session.flush()
 
     try:
-        # ── B1: 解析文件 → content_list ──────────────────
+        # ── B0: 解析文件 → content_list ──────────────────
         if preparsed_content_list is not None:
             content_list = preparsed_content_list
         else:
@@ -79,6 +156,9 @@ async def run_ingestion(
         if not content_list:
             raise ValueError("解析结果为空")
 
+        # ── B1: 自动构建/合并知识点树（新增） ──────────
+        kp_nodes = await _ensure_kp_tree(session, doc.course_id, content_list)
+
         # ── B2: 切分为 KnowledgeUnit（阶段 A 改造） ──────
         #   A1: _split_by_headings 追踪 heading 写入 meta_data
         #   A2: _filter_garbage 垃圾过滤
@@ -94,21 +174,6 @@ async def run_ingestion(
         logger.info("B2: 切分完成 → %d 个知识单元", len(units))
 
         # ── B3: 用知识点树分配 kp_id ────────────────────
-        kp_result = await session.execute(
-            select(KnowledgePoint)
-            .where(KnowledgePoint.course_id == doc.course_id)
-            .order_by(KnowledgePoint.sort_order)
-        )
-        kp_nodes = [
-            {
-                "id": str(kp.id),
-                "title": kp.title,
-                "kp_path": kp.kp_path,
-                "level": _kp_level(kp.kp_path),
-            }
-            for kp in kp_result.scalars()
-        ]
-
         logger.info("B3: KP 分配（%d 个 KP 节点）...", len(kp_nodes))
         if kp_nodes:
             from coursepilot.knowledge.kp_splitter import KPSplitter
@@ -117,7 +182,7 @@ async def run_ingestion(
             units = splitter.assign(units)
         logger.info("B3: KP 分配完成")
 
-        # ── B6: SummaryBridge 生成摘要（阶段 A 新增） ────
+        # ── B4: SummaryBridge 生成摘要（阶段 A 新增） ────
         from coursepilot.rag.summary_bridge import SummaryBridge
 
         logger.info("B6: 开始生成摘要（%d 个 unit）...", len(units))
@@ -130,10 +195,10 @@ async def run_ingestion(
         for u in units:
             u["kp_path"] = kp_map.get(u.get("kp_id", ""), "")
 
-        # ── B7: encode + Milvus insert（阶段 B 实施） ────
+        # ── B5: encode + Milvus insert（阶段 B 实施） ────
         await _encode_units(units, str(doc.course_id))
 
-        # ── B8: 批量插入 knowledge_units ─────────────────
+        # ── B6: 批量插入 knowledge_units ─────────────────
         for u in units:
             ku = KnowledgeUnit(
                 id=UUID(u["_unit_id"]) if u.get("_unit_id") else None,

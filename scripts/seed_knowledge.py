@@ -42,60 +42,9 @@ async def parse_file(file_path: str) -> tuple[list[dict], list[dict]]:
     if not content_list:
         raise ValueError("解析结果为空，请检查文件是否可读")
 
-    headings = []
-    for item in content_list:
-        level = item.get("text_level", 99)
-        if level and level <= 4:
-            headings.append({
-                "title": item.get("text", "").strip(),
-                "level": level,
-                "page_idx": item.get("page_idx", 0),
-            })
+    from coursepilot.knowledge.syllabus_parser import extract_headings
+    headings = extract_headings(content_list)
     return content_list, headings
-
-
-def headings_to_syllabus(headings: list[dict], course_name: str) -> list[dict]:
-    """将标题列表转换为知识点节点列表（含 kp_path + parent_title）。
-
-    用栈维护层级关系，功能等价于 SyllabusParser.parse() + flatten()。
-    """
-    stack: list[dict] = []
-    result: list[dict] = []
-    counters: dict[int, int] = {}
-
-    for h in headings:
-        title = h["title"]
-        level = h["level"]
-        if not title:
-            continue
-
-        while stack and stack[-1]["level"] >= level:
-            stack.pop()
-
-        counters[level] = counters.get(level, 0) + 1
-
-        if stack:
-            parent = stack[-1]
-            kp_path = parent["kp_path"] + "/" + title
-            parent_title = parent["title"]
-        else:
-            kp_path = course_name + "/" + title
-            parent_title = None
-
-        node = {
-            "title": title,
-            "level": level,
-            "kp_path": kp_path,
-            "parent_title": parent_title,
-            "sort_order": counters[level],
-            "summary": "",
-            "difficulty": 1,
-            "source": "textbook",
-        }
-        result.append(node)
-        stack.append(node)
-
-    return result
 
 
 async def main():
@@ -131,6 +80,8 @@ async def main():
         print(f"  {indent}[L{h['level']}] {h['title']}  (page {h['page_idx']})")
 
     # ━━━━ 2. 构建知识点节点 ━━━━
+    from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
+
     nodes = headings_to_syllabus(headings, args.course_name)
     print(f"\n构建 {len(nodes)} 个知识点节点:")
     for n in nodes:
