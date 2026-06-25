@@ -193,12 +193,18 @@ def _format_units(
     total_chars = 0
 
     for i, u in enumerate(top_units):
-        if total_chars > max_chars:
-            break
-        block = (
+        header = (
             f'<source id="{i + 1}" path="{u.get("kp_path", "")}" '
-            f'pages="" book="">\n{u["content"]}\n</source>\n'
+            f'pages="" book="">\n'
         )
+        footer = '\n</source>\n'
+        # 计算可用空间
+        block_overhead = len(header) + len(footer)
+        remaining = max_chars - total_chars - block_overhead
+        if remaining <= 0:
+            break
+        content = u["content"][:remaining]
+        block = header + content + footer
         parts.append(block)
         total_chars += len(block)
 

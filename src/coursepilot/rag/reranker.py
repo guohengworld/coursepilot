@@ -63,7 +63,7 @@ class Reranker:
         for i, c in enumerate(candidates):
             depth = c.get("kp_path", "").count("/") + 1
             penalty = min((depth - 1) * 0.02, config.level_penalty)
-            scores[i] += penalty
+            scores[i] -= penalty
 
         # 合并得分
         for i, c in enumerate(candidates):

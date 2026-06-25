@@ -13,12 +13,22 @@ Milvus Lite 向量存储 —— CRUD + 混合检索 + 内置 RRF
 from __future__ import annotations
 
 import logging
+import os as _os
 from pathlib import Path
 
 from coursepilot.config import settings
 from coursepilot.rag.config import config
 
 logger = logging.getLogger(__name__)
+
+# ── Windows 下 Milvus Lite 3.0 的 manifest.save() 使用 os.rename，
+#    目标已存在时 Windows 抛出 FileExistsError。在 milvus_lite 内部用 os.replace 替换。 ──
+if _os.name == "nt":
+    try:
+        import milvus_lite.storage.manifest as _manifest_mod
+        _manifest_mod.os.rename = _os.replace
+    except Exception:
+        pass
 
 COLLECTION_NAME = "knowledge_units"
 DIM = config.dim  # 1024
@@ -66,6 +76,7 @@ class VectorStore:
         schema.add_field("kp_path", DataType.VARCHAR, max_length=512)
         schema.add_field("content", DataType.VARCHAR, max_length=8192)
 
+        # 先建 collection + dense 索引（不包含 sparse，避免 Windows 下 manifest rename 竞态）
         index_params = self.client.prepare_index_params()
         index_params.add_index(
             field_name="dense_vec",
@@ -73,17 +84,24 @@ class VectorStore:
             metric_type="IP",
             params={"nlist": 128},
         )
-        index_params.add_index(
-            field_name="sparse_vec",
-            index_type="SPARSE_INVERTED_INDEX",
-            metric_type="IP",
-            params={"drop_ratio_build": 0.2},
-        )
 
         self.client.create_collection(
             collection_name=COLLECTION_NAME,
             schema=schema,
             index_params=index_params,
+        )
+
+        # 单独建 sparse 索引
+        sparse_index = self.client.prepare_index_params()
+        sparse_index.add_index(
+            field_name="sparse_vec",
+            index_type="SPARSE_INVERTED_INDEX",
+            metric_type="IP",
+            params={"drop_ratio_build": 0.2},
+        )
+        self.client.create_index(
+            collection_name=COLLECTION_NAME,
+            index_params=sparse_index,
         )
         logger.info("创建 collection %s 成功", COLLECTION_NAME)
 
@@ -164,13 +182,26 @@ class VectorStore:
         results = self.client.hybrid_search(
             collection_name=COLLECTION_NAME,
             reqs=search_requests,
-            rerank=RRFRanker(k=config.rrf_k),
+            ranker=RRFRanker(k=config.rrf_k),
             filter=filter_expr,
             output_fields=["uuid", "kp_id", "kp_path", "content"],
             limit=top_k,
         )
 
-        return results[0]
+        # pymilvus 3.0 返回 [{'id': ..., 'distance': ..., 'entity': {...}}, ...]
+        # 标准化为扁平 dict 格式
+        flat = []
+        for row in results[0]:
+            entity = row.get("entity", row)  # 兼容两种格式
+            flat.append({
+                "id": entity.get("id", row.get("id")),
+                "uuid": entity.get("uuid", ""),
+                "kp_id": entity.get("kp_id", ""),
+                "kp_path": entity.get("kp_path", ""),
+                "content": entity.get("content", ""),
+                "score": row.get("distance", row.get("score", 0.0)),
+            })
+        return flat
 
     def delete_by_uuids(self, uuids: list[str]) -> None:
         """按 uuid 批量删除（直接使用 filter 表达式删除）"""
