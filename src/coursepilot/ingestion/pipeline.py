@@ -241,9 +241,12 @@ async def _encode_units(units: list[dict], course_id: str) -> None:
     for u in units:
         u["_unit_id"] = str(uuid4())
 
-    # 批量编码
-    contents = [u["content"] for u in units]
-    vecs = encoder.encode(contents)
+    # 批量编码：summary + content 混合，兼顾语义概括与细节
+    texts = [
+        (u.get("summary") or "") + "\n" + u["content"]
+        for u in units
+    ]
+    vecs = encoder.encode(texts)
 
     # 构建 Milvus 插入数据
     payloads = []

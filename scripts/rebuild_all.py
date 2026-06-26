@@ -339,10 +339,13 @@ async def _encode_and_insert(units: list[dict], course_id: str) -> int:
 
     for batch_start in range(0, len(units), batch_size):
         batch = units[batch_start:batch_start + batch_size]
-        contents = [u["content"] for u in batch]
+        texts = [
+            (u.get("summary") or "") + "\n" + u["content"]
+            for u in batch
+        ]
 
         try:
-            vecs = encoder.encode(contents)
+            vecs = encoder.encode(texts)
         except Exception as e:
             print(f"  ⚠ 编码批次 {batch_start} 失败: {e}")
             continue
