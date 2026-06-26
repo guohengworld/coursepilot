@@ -29,6 +29,27 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+# 编号深度检测：MinerU 把同一字号的节/小节都标为 text_level=2，
+# 但 "7.1" 有 2 段编号、"7.2.1" 有 3 段，后者层级更深。
+_DOT_NUMBER_RE = re.compile(r"^(\d+(?:\.\d+)+)")
+
+
+def _effective_level(raw_level: int, title: str) -> int:
+    """结合标题编号模式修正 text_level，确保 7.2.1 不会和 7.2 同级。"""
+    # 中文章节标题始终为顶级，防止 MinerU 将其标为 L2
+    if re.match(r"第[\d一二三四五六七八九十百千]+章", title):
+        return 1
+    # "第X节" 至少是二级
+    if re.match(r"第[一二三四五六七八九十百千]+节", title):
+        return max(raw_level, 2)
+    # dot-numbering: "7.2.1" → 3 段 → level 3
+    m = _DOT_NUMBER_RE.match(title)
+    if m:
+        num_depth = len(m.group(1).split("."))
+        return max(raw_level, num_depth)
+    return raw_level
+
+
 @dataclass
 class SyllabusNode:
     """教学大纲中的一个节点，对应 knowledge)points 表的一行"""
@@ -144,9 +165,10 @@ def extract_headings(content_list: list[dict]) -> list[dict]:
     for item in content_list:
         level = item.get("text_level", 99)
         if level and level <= 4:
+            title = item.get("text", "").strip()
             headings.append({
-                "title": item.get("text", "").strip(),
-                "level": level,
+                "title": title,
+                "level": _effective_level(level, title),
                 "page_idx": item.get("page_idx", 0),
             })
     return headings
