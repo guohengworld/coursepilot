@@ -5,24 +5,25 @@
 为什么需要：LaTeX 公式和自然语言在不同嵌入空间，纯 content 检索对公式不敏感。
 LLM 生成的自然语言摘要将公式"翻译"为可检索的描述性文本。
 
-index_text = {summary} + {content[:200]}
+index_text = {summary} + "\n" + {content}
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 
 from coursepilot.config import settings
 
 logger = logging.getLogger(__name__)
 
-SUMMARY_PROMPT = """用一句话（不超过80字）概括以下教材片段的核心内容。
-如果是公式/定理，说明名称和作用；如果是例题，说明题型和用到的定理。
+SUMMARY_PROMPT = """用一句话（不超过80字）概括以下核心内容的摘要。
+如果是公式/定理，必须用汉字描述公式的运算关系，说明名称和作用；如果是例题，说明题型和用到的定理。
+【重要】只输出这一句话，不要包含任何解释、评价、前缀或问候语。"""
 
-教材内容：
-{content}
-
-摘要："""
+# 并发控制
+MAX_CONCURRENT = 20
 
 
 class SummaryBridge:
@@ -38,15 +39,18 @@ class SummaryBridge:
         model: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
+        max_concurrent: int = MAX_CONCURRENT,
     ):
         self.model = model or settings.llm_model
         self.base_url = base_url or settings.llm_base_url
         self.api_key = api_key or settings.llm_api_key
+        self.max_concurrent = max_concurrent
 
     async def run(self, units: list[dict]) -> list[dict]:
         """为每条 unit 生成摘要，写入 unit["summary"]。
 
-        跳过已有摘要的 unit（幂等）。
+        跳过已有摘要的 unit（幂等），跳过过短文本。
+        并发调用 LLM API，加速处理。
         """
         import openai
 
@@ -54,41 +58,83 @@ class SummaryBridge:
             logger.warning("LLM_API_KEY 未配置，跳过摘要生成")
             return units
 
+        # 找出需要生成摘要的 unit 索引
+        pending: list[tuple[int, dict]] = []
+        skip_short = 0
+        for i, unit in enumerate(units):
+            if unit.get("summary"):
+                continue
+            content = unit.get("content", "")
+            if len(content) < 10:
+                unit["summary"] = ""
+                skip_short += 1
+                continue
+            pending.append((i, unit))
+
+        total = len(units)
+        pending_count = len(pending)
+        if pending_count == 0:
+            logger.info("SummaryBridge: 所有 unit 已有摘要 (skipped_short=%d)", skip_short)
+            return units
+
+        logger.info(
+            "SummaryBridge: %d/%d 待生成摘要 (skipped_short=%d, concurrency=%d)",
+            pending_count, total, skip_short, self.max_concurrent,
+        )
+
         client = openai.AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
         )
 
-        total = len(units)
-        for i, unit in enumerate(units):
-            if unit.get("summary"):
-                continue
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+        completed = 0
+        failed = 0
+        t0 = time.time()
 
-            content = unit.get("content", "")
-            if len(content) < 10:  # 跳过过短的文本
-                unit["summary"] = ""
-                continue
+        async def generate_one(idx: int, unit: dict) -> None:
+            nonlocal completed, failed
+            async with semaphore:
+                content = unit["content"]
+                try:
+                    response = await client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": SUMMARY_PROMPT},
+                            {"role": "user", "content": content},
+                        ],
+                        temperature=0.3,
+                        max_tokens=200,
+                        timeout=60.0,
+                        extra_body={"thinking": {"type": "disabled"}},
+                    )
+                    summary = response.choices[0].message.content
+                    if summary:
+                        unit["summary"] = summary.strip()
+                    else:
+                        unit["summary"] = ""
+                        failed += 1
+                except Exception:
+                    unit["summary"] = ""
+                    failed += 1
 
-            try:
-                response = await client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": SUMMARY_PROMPT.format(content=content[:500]),
-                        }
-                    ],
-                    temperature=0,
-                    max_tokens=120,
-                    timeout=30.0,
-                )
-                summary = response.choices[0].message.content.strip()
-                unit["summary"] = summary
-                if (i + 1) % 20 == 0 or i == 0:
-                    print(f"     📝 SummaryBridge [{i+1}/{total}]: {summary[:60]}...")
-            except Exception:
-                if (i + 1) % 20 == 0 or i == 0:
-                    print(f"     ⚠ SummaryBridge [{i+1}/{total}] 失败，继续...")
-                unit["summary"] = ""
+                completed += 1
+                if completed % 50 == 0 or completed == pending_count:
+                    elapsed = time.time() - t0
+                    rate = completed / elapsed if elapsed > 0 else 0
+                    eta = (pending_count - completed) / rate if rate > 0 else 0
+                    print(
+                        f"     SummaryBridge [{completed}/{pending_count}] "
+                        f"{rate:.1f}/s ETA:{eta:.0f}s fail:{failed}"
+                    )
+
+        await asyncio.gather(*[generate_one(idx, unit) for idx, unit in pending])
+
+        total_elapsed = time.time() - t0
+        success = pending_count - failed
+        logger.info(
+            "SummaryBridge done: %d/%d 成功, %d 失败 (%.0fs)",
+            success, pending_count, failed, total_elapsed,
+        )
 
         return units
