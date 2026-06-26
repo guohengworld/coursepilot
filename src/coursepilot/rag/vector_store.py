@@ -80,9 +80,9 @@ class VectorStore:
         index_params = self.client.prepare_index_params()
         index_params.add_index(
             field_name="dense_vec",
-            index_type="INF_FLAT",
+            index_type="FLAT",  # 修改: 使用标准的 FLAT 索引
             metric_type="IP",
-            params={"nlist": 128},
+            # params={"nlist": 128},    # 移除: FLAT 索引不需要 nlist 参数
         )
 
         self.client.create_collection(
