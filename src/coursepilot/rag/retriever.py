@@ -110,6 +110,7 @@ class Retriever:
             context = await _kp_expand(
                 session, top_units, config.context_max_chars,
                 query=rewritten, reranker=self.reranker,
+                encoder=self.encoder, query_dense=vecs["dense"],
             )
             print(f"[retriever] 阶段4-KP扩展 耗时={(_time.monotonic()-t0)*1000:.0f}ms, context_chars={len(context)}")
         else:
@@ -133,22 +134,53 @@ class Retriever:
 
 # == KP 文档金字塔扩展
 
-def _fast_rank(query: str, units: list[dict], top_k: int = 30) -> list[dict]:
-    """基于 token 重叠率（简化 Jaccard）快速粗排，用于削减重排序规模。
+def _cosine(a: list[float], b: list[float]) -> float:
+    """两个稠密向量的余弦相似度"""
+    import math
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
-    query 与每个 unit 的 content+summary 做中/英文 token 提取，
-    计算 Jaccard 系数 = |A ∩ B| / |A ∪ B|，纯 CPU 字符串操作。
-    200 个 unit 耗时 < 1ms。
+
+def _dense_rank(
+    query_dense: list[float],
+    units: list[dict],
+    encoder,
+    top_k: int = 30,
+) -> list[dict]:
+    """BGE-M3 dense embedding 语义粗排
+
+    全部 unit 批量编码后与 query 做余弦相似度排序，取 top_k。
+    200 个 unit 编码 ~1-2s（CPU），语义匹配远优于关键词重叠。
     """
-    import re as _re
+    if not units or encoder is None:
+        return units[:top_k]
 
-    _tokenize = lambda s: set(
-        _re.findall(r"[一-鿿]+|[a-zA-Z0-9]+", s.lower())
-    )
+    import time as _time
+    t0 = _time.monotonic()
+    contents = [u["content"] for u in units]
+    vecs = encoder.encode(contents)
+
+    scored = []
+    for i, u in enumerate(units):
+        sim = _cosine(query_dense, vecs[i]["dense"])
+        scored.append((u, sim))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    print(f"[dense_rank] {len(units)} unit 编码+排序, 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+    return [u for u, _ in scored[:top_k]]
+
+
+def _fast_rank(query: str, units: list[dict], top_k: int = 30) -> list[dict]:
+    """关键词 Jaccard 粗排（encoder 不可用时的 fallback）"""
+    import re as _re
+    _tokenize = lambda s: set(_re.findall(r"[一-鿿]+|[a-zA-Z0-9]+", s.lower()))
     q_tokens = _tokenize(query)
     if not q_tokens:
         return units[:top_k]
-
     scored: list[tuple[dict, float]] = []
     for u in units:
         text = f"{u.get('summary', '')} {u['content']}"
@@ -157,9 +189,7 @@ def _fast_rank(query: str, units: list[dict], top_k: int = 30) -> list[dict]:
             scored.append((u, 0.0))
         else:
             overlap = q_tokens & u_tokens
-            score = len(overlap) / len(q_tokens | u_tokens)
-            scored.append((u, score))
-
+            scored.append((u, len(overlap) / len(q_tokens | u_tokens)))
     scored.sort(key=lambda x: x[1], reverse=True)
     return [u for u, _ in scored[:top_k]]
 
@@ -171,12 +201,15 @@ async def _kp_expand(
     *,
     query: str = "",
     reranker=None,
+    encoder=None,
+    query_dense: list[float] | None = None,
 ) -> str:
-    """KP 全量扩展 + query-unit 重排序
+    """KP 全量扩展 + 语义粗排 + cross-encoder 精排
 
     1. 拉取 top-5 KP 下的全部 unit
-    2. query-unit 重排序（复用 bge-reranker），按相关性降序
-    3. 按得分组装结构化上下文，超上限截断
+    2. BGE-M3 dense embedding 语义粗排 → top-30
+    3. bge-reranker cross-encoder 精排
+    4. 按得分组装结构化上下文，超上限截断
     """
     from uuid import UUID
 
@@ -220,14 +253,17 @@ async def _kp_expand(
             "filename": row[6] or "未知教材",
         })
 
-    # 两阶段过滤：粗排(关键词) → 精排(cross-encoder)
+    # 两阶段过滤：语义粗排(BGE-M3 dense) → 精排(cross-encoder)
     N_COARSE = 30  # 粗排保留数，≤30 直接精排
     if query and reranker is not None and len(all_units) > N_COARSE:
         import time as _time
         print(f"[kp_expand] 两阶段过滤: 全量={len(all_units)} → 粗排top-{N_COARSE} → 精排")
-        t0 = _time.monotonic()
-        coarse = _fast_rank(query, all_units, top_k=N_COARSE)
-        print(f"[kp_expand] 粗排完成, 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+        if encoder is not None and query_dense is not None:
+            coarse = _dense_rank(query_dense, all_units, encoder, top_k=N_COARSE)
+        else:
+            t0 = _time.monotonic()
+            coarse = _fast_rank(query, all_units, top_k=N_COARSE)
+            print(f"[kp_expand] 关键词粗排完成, 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
         try:
             t1 = _time.monotonic()
             all_units = reranker.rerank(query, coarse, top_k=len(coarse))
