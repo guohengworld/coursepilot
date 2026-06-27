@@ -29,14 +29,14 @@
 
 ```
 检索阶段 (~5-10s)
-├── Query Rewrite (DeepSeek API)       ~3-5s
-├── Dense + Sparse Encoding (BGE-M3)   ~1-2s
-├── Milvus Hybrid Search               ~0.5s
-├── Rerank (bge-reranker-v2-m3)       ~0.5-2s
-└── KP Expand (DB query)              ~0.1s
+├── Query Rewrite (DeepSeek API)       ~1-2s
+├── Dense + Sparse Encoding (BGE-M3)   ~0-1s
+├── Milvus Hybrid Search               ~0.05s
+├── Rerank (bge-reranker-v2-m3)       ~3-4s
+└── KP Expand (DB query)              ~0.05s
 
 生成阶段 (~10-30s)
-└── DeepSeek LLM Generate             ~10-30s
+└── DeepSeek LLM Generate             ~10-20s
 
 Judge 阶段 (~40-150s) ← 主导瓶颈
 ├── Context Precision: N_units × ~1s  (per-unit LLM judge)

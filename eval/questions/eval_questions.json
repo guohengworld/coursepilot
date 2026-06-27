@@ -35,6 +35,7 @@
     "question": "如何利用向量叉积计算点P到直线l的距离？请简述方法。",
     "answer": "计算点P到直线l的距离时，可先取直线上一点$P_0$，构造向量$\\overrightarrow{P_0P}$，然后计算方向向量$\\pmb{s}$与$\\overrightarrow{P_0P}$的叉积的模，再除以$\\pmb{s}$的模，即距离$d=\frac{|\\pmb{s}\times\\overrightarrow{P_0P}|}{|\\pmb{s}|}$。",
     "ground_truth_contexts": [
+      "62f99034-3f0d-4129-841b-65b19f9d9a9a",
       "fc6f726e-a944-4579-b920-82d9c71395b3"
     ],
     "question_type": "calculation",
@@ -66,9 +67,14 @@
     "question": "第一类曲线积分和第二类曲线积分在定义、几何意义和计算方法上有什么区别？",
     "answer": "第一类曲线积分是对标量函数沿曲线弧长的积分，用于计算曲线上的质量或弧长，与曲线方向无关，计算时需将曲线参数化并乘以弧长微分 $ds$。第二类曲线积分是对向量值函数沿定向曲线的积分，用于计算变力做功，与曲线方向有关（改变方向积分变号），计算时需将向量函数与切向量点积并乘以弧长微分。",
     "ground_truth_contexts": [
-      "b6bd71ff-2141-4de1-8cb4-a50b7c412498",
-      "fe971c58-0d27-4e6a-b095-b410e602ebf9",
-      "e1e182a9-6fb7-4cc3-bae7-85f4a64edea7"
+      "19a1ec6a-0708-4258-b89b-98204ebd9313",
+      "09e9545a-a23a-4f82-a2c0-de3bb6dc504d",
+      "eaa4b21c-03a5-45e5-b18b-6be73c3b6c54",
+      "67b8d174-698e-4ef6-893e-a9ec4588f4ef",
+      "58d5abec-7543-4db4-bd05-1f695d413a5f",
+      "e2f59fb3-483b-4498-a5e1-9a3e6dea4fa2",
+      "e0574fb3-781f-4885-b1b1-79fcd4213e00",
+      "85920d8e-92a2-4a4d-af1e-4715a399ce6f"
     ],
     "question_type": "comparison",
     "kp_path": "微积分/第10章 曲线积分和曲面积分",

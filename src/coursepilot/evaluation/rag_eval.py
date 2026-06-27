@@ -42,7 +42,7 @@ JUDGE_CONTEXT_PRECISION_PROMPT = """你是一个严格的评估者。给定一�
 
 问题：{question}
 
-检索到的教材内容（前500字）：
+检索到的教材内容：
 {context}
 
 这段内容是否包含可用于回答该问题的信息？只回答 "yes" 或 "no"。"""
@@ -326,8 +326,9 @@ class RAGEvaluator:
             if result.answer and context:
                 print("[eval] LLM-as-Judge 评估开始...")
                 t_judge = time.monotonic()
+                top_kp_ids = metadata.get("top_kp_ids", [])
                 result.context_precision = await self._judge_context_precision(
-                    question["question"], all_uuids, session
+                    question["question"], top_kp_ids, session
                 )
                 result.faithfulness = await self._judge_faithfulness(
                     result.answer, context
@@ -408,30 +409,33 @@ class RAGEvaluator:
         return len(gt_set & ret_set) / len(gt_set)
 
     async def _judge_context_precision(
-        self, question: str, retrieved_uuids: list[str], session: AsyncSession
+        self, question: str, top_kp_ids: list[str], session: AsyncSession
     ) -> float:
-        """LLM-as-Judge: 每条检索到的上下文是否与问题相关"""
-        if not retrieved_uuids:
+        """LLM-as-Judge: KP 级判定，每 KP 拼接全部 unit 后截断一次 judge"""
+        if not top_kp_ids:
             return 0.0
 
-        # 加载检索到的 unit 内容（限制每条前 500 字）
-        units = await self._load_units(session, retrieved_uuids)
-        if not units:
-            return 0.0
+        kp_ids = top_kp_ids[:5]
+        relevant_kps = 0
 
-        relevant_count = 0
-        for content in units:
-            preview = content[:500]
-            prompt = JUDGE_CONTEXT_PRECISION_PROMPT.format(
-                question=question, context=preview
-            )
+        for kp_id in kp_ids:
+            units = await self._load_units_by_kp(session, kp_id)
+            if not units:
+                continue
+            combined = "\n\n".join(units)[:3000]
             try:
-                answer = await self._llm_judge(prompt, max_tokens=5)
-                relevant_count += 1 if answer.strip().lower().startswith("yes") else 0
+                answer = await self._llm_judge(
+                    JUDGE_CONTEXT_PRECISION_PROMPT.format(
+                        question=question, context=combined
+                    ),
+                    max_tokens=5,
+                )
+                if answer.strip().lower().startswith("yes"):
+                    relevant_kps += 1
             except Exception:
-                relevant_count += 1  # 宽容处理：LLM 失败时假定相关
+                relevant_kps += 1
 
-        return relevant_count / len(units)
+        return relevant_kps / len(kp_ids)
 
     async def _judge_faithfulness(
         self, answer: str, context: str
@@ -488,6 +492,17 @@ class RAGEvaluator:
         result = await session.execute(
             select(KnowledgeUnit.content)
             .where(KnowledgeUnit.id.in_([UUID(uid) for uid in uuids]))
+        )
+        return [row[0] for row in result.all() if row[0]]
+
+    @staticmethod
+    async def _load_units_by_kp(
+        session: AsyncSession, kp_id: str
+    ) -> list[str]:
+        """按 KP ID 加载全部 unit 内容"""
+        result = await session.execute(
+            select(KnowledgeUnit.content)
+            .where(KnowledgeUnit.kp_id == UUID(kp_id))
         )
         return [row[0] for row in result.all() if row[0]]
 
