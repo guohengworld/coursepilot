@@ -47,8 +47,10 @@ class QueryRewriter:
         self.api_key = api_key or settings.llm_api_key
 
     async def rewrite(self, query: str) -> str:
+        print(f"[rewrite] 开始改写: {query[:60]}...")
         if not self.api_key:
             logger.debug("LLM_API_KEY 未配置，降级为直接返回原问题")
+            print("[rewrite] API key 未配置，跳过")
             return query
 
         client = openai.AsyncOpenAI(
@@ -58,6 +60,7 @@ class QueryRewriter:
         prompt = REWRITE_PROMPT.format(query=query)
 
         try:
+            print("[rewrite] 调用 DeepSeek...")
             response = await client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
@@ -65,9 +68,11 @@ class QueryRewriter:
                 max_tokens=200,
             )
             rewritten = response.choices[0].message.content.strip()
+            print(f"[rewrite] 完成: '{query[:40]}...' → '{rewritten[:40]}...'")
             logger.debug("查询改写：'%s' → '%s'", query, rewritten)
             return rewritten
         except Exception as e:
+            print(f"[rewrite] 失败: {e}")
             logger.warning("LLM 改写失败：%s", e)
             return query
 

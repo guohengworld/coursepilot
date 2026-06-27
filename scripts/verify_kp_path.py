@@ -55,11 +55,11 @@ async def main():
         return
 
     # ━━━━ 1. 解析目录页（前 10 页，0-indexed: 0-9）━━━━
-    toc_dir = "tests/output/kp_verify_toc"
+    toc_dir = "data/parsed/kp_verify_toc"
     toc_cl, toc_headings, toc_nodes = await parse_page_range(str(pdf_abs), 0, 9, toc_dir)
 
     # ━━━━ 2. 解析 117-127 页 (0-indexed: 116-126) ━━━━
-    body_dir = "tests/output/kp_verify_body"
+    body_dir = "data/parsed/kp_verify_body"
     body_cl, body_headings, body_nodes = await parse_page_range(str(pdf_abs), 116, 126, body_dir)
 
     # ━━━━ 3. 对比分析 ━━━━

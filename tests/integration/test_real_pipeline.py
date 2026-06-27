@@ -22,9 +22,9 @@ import pytest
 os.environ["MINERU_MODEL_SOURCE"] = "local"
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-PDF_PATH = Path(__file__).parent / "fixtures" / "pdfs" / "大学数学 微积分 下册.pdf"
+PDF_PATH = Path(__file__).parent.parent / "fixtures" / "pdfs" / "大学数学 微积分 下册.pdf"
 COURSE_NAME = "微积分"
-OUTPUT_DIR = "tests/output/real_pipeline_test"
+OUTPUT_DIR = "data/parsed/real_pipeline_test"
 
 
 # ═══════════════════════════════════════════════════════════

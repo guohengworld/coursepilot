@@ -6,16 +6,16 @@
 
 ```bash
 # 运行所有单元测试
-PYTHONPATH=src .venv/Scripts/python -m pytest tests/test_week2.py -v
+PYTHONPATH=src .venv/Scripts/python -m pytest tests/unit/ -v
 
 # 运行单个测试
-PYTHONPATH=src .venv/Scripts/python -m pytest tests/test_week2.py::TestKPSplitter::test_exact_heading_match -v
+PYTHONPATH=src .venv/Scripts/python -m pytest tests/unit/test_week2.py::TestKPSplitter::test_exact_heading_match -v
 
 # 运行较慢的真实管道集成测试（MinerU，需要数据库）
-PYTHONPATH=src .venv/Scripts/python -m pytest tests/test_real_pipeline.py -v -s
+PYTHONPATH=src .venv/Scripts/python -m pytest tests/integration/ -v -s
 
 # 代码规范检查
-.venv/Scripts/ruff check src/ tests/ scripts/
+.venv/Scripts/ruff check src/ tests/ scripts/ eval/
 
 # 类型检查
 .venv/Scripts/mypy src/
@@ -32,6 +32,10 @@ PYTHONPATH=src .venv/Scripts/python -m scripts.seed_knowledge "tests/fixtures/pd
 # 批量导入全部 8 本教材（5 门课程）
 PYTHONPATH=src .venv/Scripts/python -m scripts.batch_ingest
 
+# RAGAS 评估
+PYTHONPATH=src EMBEDDING_MODEL_PATH="F:/all-projs/models/bge-m3" .venv/Scripts/python -m eval.eval_ragas baseline
+PYTHONPATH=src EMBEDDING_MODEL_PATH="F:/all-projs/models/bge-m3" .venv/Scripts/python -m eval.eval_ragas grid --stage 1
+
 # Alembic 数据库迁移
 alembic revision --autogenerate -m "描述信息"
 alembic upgrade head
@@ -39,7 +43,7 @@ alembic upgrade head
 
 ## 系统架构
 
-CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技术栈：FastAPI + SQLAlchemy 异步模式 + PostgreSQL。文档解析：MinerU（PDF OCR）+ python-docx + 自定义 Markdown 解析器。规划中：Milvus 向量存储、LangGraph Agent、Streamlit UI。
+CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技术栈：FastAPI + SQLAlchemy 异步模式 + PostgreSQL。文档解析：MinerU（PDF OCR）+ python-docx + 自定义 Markdown 解析器。RAG 引擎：BGE-M3 编码 + Milvus Lite 向量存储 + bge-reranker-v2-m3 重排序 + DeepSeek LLM 生成。
 
 ## 两阶段导入管道（核心机制）
 
@@ -74,8 +78,18 @@ CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技�
 | src/coursepilot/knowledge/syllabus_parser.py | SyllabusParser — Markdown/中文编号大纲 → 树节点 |
 | src/coursepilot/knowledge/kp_tree.py | KPTree — 递归 CTE 查询，使用 parent_id 回填的批量插入 |
 | src/coursepilot/storage/file_store.py | FileStore — 本地文件系统存储，文件保存在 data/uploads// 下，使用 UUID 命名 |
+| src/coursepilot/rag/vector_store.py | VectorStore — Milvus Lite 向量存储 CRUD + 混合检索 + RRF |
+| src/coursepilot/rag/encoder.py | Encoder — BGE-M3 编码器（dense 1024-dim + sparse） |
+| src/coursepilot/rag/retriever.py | Retriever — 五阶段检索编排（改写→编码→检索→重排序→KP 扩展） |
+| src/coursepilot/rag/reranker.py | Reranker — bge-reranker-v2-m3 cross-encoder 重排序 |
+| src/coursepilot/rag/generator.py | Generator — DeepSeek LLM 生成（含流式 SSE） |
+| src/coursepilot/rag/query_rewriter.py | QueryRewriter — DeepSeek 查询改写 |
+| src/coursepilot/evaluation/rag_eval.py | RAGEvaluator — RAGAS 四大指标评估器 |
 | scripts/seed_knowledge.py | CLI 工具：解析 PDF → 提取标题 → 构建 KP 树；--ingest 参数可同时执行知识单元导入 |
 | scripts/batch_ingest.py | 批量处理 tests/fixtures/pdfs/ 下的全部 8 个 PDF，按课程分组 |
+| eval/eval_ragas.py | RAGAS 评估 CLI（baseline / grid / compare） |
+| data/milvus/ | Milvus Lite 向量数据库文件 |
+| data/parsed/ | MinerU 解析输出（临时调试用） |
 
 ## 数据库模型（11 张表）
 
@@ -97,8 +111,23 @@ CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技�
 
 ## 测试结构
 
-- `tests/test_week2.py` — 56 个单元测试，覆盖解析器、大纲提取、KP 分割器、文件存储及边缘情况（无需数据库，其中 2 个需要数据库的测试会被跳过）。
-- `tests/test_real_pipeline.py` — 单个慢速集成测试，包含 8 个步骤，需要 PostgreSQL + MinerU 环境。
+```
+tests/
+├── unit/               # 单元测试（无需数据库/外部服务）
+│   ├── test_week2.py   # 解析器、大纲提取、KP 分割器、文件存储 (56 tests)
+│   ├── test_rag.py     # RAG 组件单元测试
+│   ├── test_vector_store.py  # 向量存储测试
+│   ├── test_summary_bridge.py # SummaryBridge 测试
+│   └── test_import.py  # 导入验证
+├── integration/        # 集成测试（需要 PostgreSQL + MinerU + Milvus）
+│   ├── test_real_pipeline.py    # 完整导入管道 (8 steps)
+│   ├── test_ingestion.py        # PDF/DOCX 解析器
+│   └── test_gpu_availability.py # GPU 环境检测
+└── fixtures/           # 测试数据
+    ├── pdfs/           # 8 本教材 PDF
+    ├── eval_questions.json        # (已移至 eval/questions/)
+    └── exported_units.json
+```
 
 ## 关键设计模式
 

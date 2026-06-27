@@ -51,7 +51,17 @@ class VectorStore:
             db_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("连接 Milvus Lite: %s", db_path)
-        self.client = MilvusClient(db_path)
+        self.client = MilvusClient(
+            db_path,
+            # gRPC keepalive 配置：降低 ping 频率，避免 Milvus Lite 触发
+            # "too_many_pings" GOAWAY 导致连接断开/挂起
+            grpc_options=[
+                ("grpc.keepalive_time_ms", 60000),       # 60s ping 一次（默认 10s 太频繁）
+                ("grpc.keepalive_timeout_ms", 20000),    # ping 超时 20s
+                ("grpc.keepalive_permit_without_calls", 1),  # 无活跃调用时也允许 keepalive
+                ("grpc.http2.max_pings_without_data", 0),    # 不限次数的空数据 ping
+            ],
+        )
 
     # == Collection 管理
 
@@ -59,6 +69,7 @@ class VectorStore:
         """创建 collection + 双索引，幂等（已存在则跳过）"""
         if self.client.has_collection(COLLECTION_NAME):
             logger.info("已存在 collection %s，跳过创建", COLLECTION_NAME)
+            self.client.load_collection(COLLECTION_NAME)
             return
 
         from pymilvus import DataType
@@ -103,7 +114,17 @@ class VectorStore:
             collection_name=COLLECTION_NAME,
             index_params=sparse_index,
         )
+        self.client.load_collection(COLLECTION_NAME)
         logger.info("创建 collection %s 成功", COLLECTION_NAME)
+
+    def _ensure_loaded(self) -> None:
+        """确保 collection 已加载到内存（Milvus Lite 重启后需显式 load）"""
+        print("[vector_store] _ensure_loaded 开始...")
+        try:
+            self.client.load_collection(COLLECTION_NAME)
+            print("[vector_store] _ensure_loaded 完成")
+        except Exception as e:
+            print(f"[vector_store] _ensure_loaded 异常(忽略): {e}")
 
     # == CRUD
 
@@ -158,6 +179,8 @@ class VectorStore:
         """
         from pymilvus import AnnSearchRequest, RRFRanker
 
+        self._ensure_loaded()
+
         # Dense 检索请求
         dense_req = AnnSearchRequest(
             data=[dense_vec],
@@ -179,14 +202,23 @@ class VectorStore:
 
         filter_expr = f'course_id == "{course_id}"'
 
-        results = self.client.hybrid_search(
-            collection_name=COLLECTION_NAME,
-            reqs=search_requests,
-            ranker=RRFRanker(k=config.rrf_k),
-            filter=filter_expr,
-            output_fields=["uuid", "kp_id", "kp_path", "content"],
-            limit=top_k,
-        )
+        print(f"[vector_store] hybrid_search 开始 (course={course_id}, dense_top_k={config.dense_top_k}, sparse={config.enable_sparse})")
+        t0 = __import__("time").monotonic()
+        try:
+            results = self.client.hybrid_search(
+                collection_name=COLLECTION_NAME,
+                reqs=search_requests,
+                ranker=RRFRanker(k=config.rrf_k),
+                filter=filter_expr,
+                output_fields=["uuid", "kp_id", "kp_path", "content"],
+                limit=top_k,
+            )
+            elapsed = (__import__("time").monotonic() - t0) * 1000
+            print(f"[vector_store] hybrid_search 完成, 耗时={elapsed:.0f}ms, 结果数={len(results[0]) if results else 0}")
+        except Exception as e:
+            elapsed = (__import__("time").monotonic() - t0) * 1000
+            print(f"[vector_store] hybrid_search 失败, 耗时={elapsed:.0f}ms, 错误={e}")
+            raise
 
         # pymilvus 3.0 返回 [{'id': ..., 'distance': ..., 'entity': {...}}, ...]
         # 标准化为扁平 dict 格式
@@ -237,6 +269,7 @@ class VectorStore:
 
     def query_by_course(self, course_id: str) -> list[dict]:
         """查询某课程的全部向量元数据（不含向量本身）"""
+        self._ensure_loaded()
         filter_expr = f'course_id == "{course_id}"'
         return self.client.query(
             collection_name=COLLECTION_NAME,

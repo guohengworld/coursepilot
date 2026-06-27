@@ -65,40 +65,63 @@ class Retriever:
           - formatted_context: XML 格式的教材内容，直接送入 LLM
           - metadata: {query_raw, query_rewritten, top_rerank_scores, source_kp_paths, candidate_count}
         """
+        import time as _time
+        t_total = _time.monotonic()
+
         # 阶段0：查询改写
         rewritten = query
         if enable_rewrite and config.enable_rewrite:
+            t0 = _time.monotonic()
             rewritten = await self.rewriter.rewrite(query)
+            print(f"[retriever] 阶段0-改写 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
 
         # 阶段1：BGE-M3 编码
+        t0 = _time.monotonic()
+        print("[retriever] 阶段1-编码 开始...")
         vecs = self.encoder.encode_query(rewritten)
+        print(f"[retriever] 阶段1-编码 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
 
         # 阶段2：Milvus 混合检索 + RRF → top-20 候选
+        t0 = _time.monotonic()
+        print("[retriever] 阶段2-检索 开始...")
         candidates = self.vector_store.hybrid_search(
             vecs["dense"], vecs["sparse"], course_id, top_k=20
         )
+        print(f"[retriever] 阶段2-检索 耗时={(_time.monotonic()-t0)*1000:.0f}ms, 候选数={len(candidates)}")
 
         # 阶段3：重排序 → top-5
+        t0 = _time.monotonic()
         if config.enable_rerank:
+            print("[retriever] 阶段3-重排序 开始...")
             top_units = self.reranker.rerank(rewritten, candidates, top_k=5)
+            print(f"[retriever] 阶段3-重排序 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
         else:
             # 不用重排序时，直接用 RRF score 排序取 top-5
             candidates.sort(key=lambda x : x.get("score", 0), reverse=True)
             for c in candidates:
                 c["rerank_score"] = c.get("score", 0)
             top_units = candidates[:5]
+            print(f"[retriever] 阶段3-跳过重排序, top_k=5")
 
         # 阶段4：KP 扩展（从 PG(PostgreSQL) 拉取同 KP 全部 unit，组装为 LLM 上下文）
+        t0 = _time.monotonic()
         if config.enable_kp_expand:
+            print("[retriever] 阶段4-KP扩展 开始...")
             context = await _kp_expand(session, top_units, config.context_max_chars)
+            print(f"[retriever] 阶段4-KP扩展 耗时={(_time.monotonic()-t0)*1000:.0f}ms, context_chars={len(context)}")
         else:
             context = _format_units(top_units, config.context_max_chars)
+            print(f"[retriever] 阶段4-格式化 耗时={(_time.monotonic()-t0)*1000:.0f}ms, context_chars={len(context)}")
+
+        print(f"[retriever] 总耗时={(_time.monotonic()-t_total)*1000:.0f}ms")
 
         metadata = {
             "query_raw": query,
             "query_rewritten": rewritten,
             "top_rerank_scores": [u.get("rerank_score", 0) for u in top_units],
             "source_kp_paths": [u.get("kp_path", "") for u in top_units],
+            "top_uuids": [u.get("uuid", "") for u in top_units],
+            "top_kp_ids": [u.get("kp_id", "") for u in top_units],
             "candidate_count": len(candidates),
         }
 

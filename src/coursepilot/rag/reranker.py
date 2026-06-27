@@ -55,9 +55,12 @@ class Reranker:
         if not candidates:
             return []
 
+        print(f"[reranker] 开始重排序, 候选数={len(candidates)}, top_k={top_k}")
+        t0 = __import__("time").monotonic()
         # 构造 query-doc 对
         pairs = [[query, c["content"]] for c in candidates]
         scores = self.model.compute_score(pairs, normalize=True)
+        print(f"[reranker] compute_score 完成, 耗时={(__import__('time').monotonic()-t0)*1000:.0f}ms")
 
         # 层级惩罚：更深的 kp_path 给轻微加分
         for i, c in enumerate(candidates):

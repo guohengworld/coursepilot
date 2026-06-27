@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     level_penalty: float = 0.1  # 层级不匹配惩罚系数
 
     # ── Milvus ─────────────────────────────────────────
-    milvus_uri: str = "./milvus.db"          # Milvus Lite 存储路径
+    milvus_uri: str = "./data/milvus/milvus.db"     # Milvus Lite 存储路径
     milvus_collection: str = "coursepilot_knowledge"
 
     # ── Ingestion ───────────────────────────────────────

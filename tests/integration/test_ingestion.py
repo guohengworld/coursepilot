@@ -9,7 +9,7 @@ import pytest
 
 os.environ["MINERU_MODEL_SOURCE"] = "local"
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
+FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 PDF_DIR = FIXTURES_DIR / "pdfs"
 
 
