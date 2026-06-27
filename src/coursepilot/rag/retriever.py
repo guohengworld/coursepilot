@@ -133,121 +133,127 @@ class Retriever:
 
 # == KP 文档金字塔扩展
 
+def _fast_rank(query: str, units: list[dict], top_k: int = 30) -> list[dict]:
+    """基于 token 重叠率（简化 Jaccard）快速粗排，用于削减重排序规模。
+
+    query 与每个 unit 的 content+summary 做中/英文 token 提取，
+    计算 Jaccard 系数 = |A ∩ B| / |A ∪ B|，纯 CPU 字符串操作。
+    200 个 unit 耗时 < 1ms。
+    """
+    import re as _re
+
+    _tokenize = lambda s: set(
+        _re.findall(r"[一-鿿]+|[a-zA-Z0-9]+", s.lower())
+    )
+    q_tokens = _tokenize(query)
+    if not q_tokens:
+        return units[:top_k]
+
+    scored: list[tuple[dict, float]] = []
+    for u in units:
+        text = f"{u.get('summary', '')} {u['content']}"
+        u_tokens = _tokenize(text)
+        if not u_tokens:
+            scored.append((u, 0.0))
+        else:
+            overlap = q_tokens & u_tokens
+            score = len(overlap) / len(q_tokens | u_tokens)
+            scored.append((u, score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [u for u, _ in scored[:top_k]]
+
+
 async def _kp_expand(
     session: AsyncSession,
     top_units: list[dict],
     max_chars: int = 8000,
     *,
-    window_size: int = 5,
     query: str = "",
     reranker=None,
 ) -> str:
-    """滑动窗口 KP 扩展 + query-unit 重排序
+    """KP 全量扩展 + query-unit 重排序
 
-    1. 每个 KP 找到匹配 unit 的位置，取前后 window_size 个 unit
-    2. 对窗口内全部 unit 做 query-unit 重排序（复用 bge-reranker）
-    3. 按得分组装结构化上下文
-
-    相比全量 KP 扩展，窗口过滤噪声 + 重排序保证相关性。
+    1. 拉取 top-5 KP 下的全部 unit
+    2. query-unit 重排序（复用 bge-reranker），按相关性降序
+    3. 按得分组装结构化上下文，超上限截断
     """
     from uuid import UUID
 
-    # 按 kp_id 分组，记录最佳匹配 unit 的 UUID
-    kp_matches: dict[str, str] = {}   # kp_id -> best_match_uuid
-    kp_order: dict[str, int] = {}      # kp_id -> rank (0 = best)
-    for i, u in enumerate(top_units):
-        kp_id = u.get("kp_id", "")
-        if kp_id and kp_id not in kp_matches:
-            kp_matches[kp_id] = u.get("uuid", "")
-            kp_order[kp_id] = i
-
-    if not kp_matches:
+    kp_ids = list({u["kp_id"] for u in top_units})
+    if not kp_ids:
         return ""
 
-    # 逐 KP 加载全部 unit，取滑动窗口
-    window_units: list[dict] = []
+    kp_order = {kp_id: i for i, kp_id in enumerate(kp_ids)}
 
-    for kp_id, match_uuid in kp_matches.items():
-        result = await session.execute(
-            select(KnowledgeUnit)
-            .where(KnowledgeUnit.kp_id == UUID(kp_id))
-            .order_by(KnowledgeUnit.seq_order)
+    # 一次性拉取全部 KP 下的 unit（join kp_path + filename）
+    stmt = (
+        select(
+            KnowledgeUnit.id,
+            KnowledgeUnit.content,
+            KnowledgeUnit.summary,
+            KnowledgeUnit.page_ref,
+            KnowledgeUnit.kp_id,
+            KnowledgePoint.kp_path,
+            Document.filename,
         )
-        all_units = result.scalars().all()
-        if not all_units:
-            continue
+        .join(KnowledgePoint, KnowledgeUnit.kp_id == KnowledgePoint.id)
+        .outerjoin(Document, KnowledgeUnit.document_id == Document.id)
+        .where(KnowledgeUnit.kp_id.in_([UUID(k) for k in kp_ids]))
+        .order_by(KnowledgeUnit.kp_id, KnowledgeUnit.seq_order)
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
 
-        # 找匹配 unit 的位置
-        match_idx = 0
-        for idx, u in enumerate(all_units):
-            if str(u.id) == match_uuid:
-                match_idx = idx
-                break
-
-        # 滑动窗口
-        start = max(0, match_idx - window_size)
-        end = min(len(all_units), match_idx + window_size + 1)
-
-        for u in all_units[start:end]:
-            window_units.append({
-                "uuid": str(u.id),
-                "content": u.content or "",
-                "summary": u.summary or "",
-                "page_ref": u.page_ref or "",
-                "kp_id": kp_id,
-                "kp_path": "",  # 后面回填
-                "filename": "",
-                "seq_order": u.seq_order,
-            })
-
-    if not window_units:
+    if not rows:
         return ""
 
-    # 回填 kp_path 和 filename
-    all_kp_ids = list({u["kp_id"] for u in window_units})
-    kp_info = {}
-    if all_kp_ids:
-        r = await session.execute(
-            select(KnowledgePoint.id, KnowledgePoint.kp_path)
-            .where(KnowledgePoint.id.in_([UUID(k) for k in all_kp_ids]))
-        )
-        kp_info = {str(row[0]): row[1] for row in r.all()}
+    all_units: list[dict] = []
+    for row in rows:
+        all_units.append({
+            "uuid": str(row[0]),
+            "content": row[1] or "",
+            "summary": row[2] or "",
+            "page_ref": row[3] or "",
+            "kp_id": str(row[4]),
+            "kp_path": row[5] or "",
+            "filename": row[6] or "未知教材",
+        })
 
-    doc_info = {}
-    all_unit_ids = [UUID(u["uuid"]) for u in window_units]
-    if all_unit_ids:
-        r = await session.execute(
-            select(KnowledgeUnit.id, Document.filename)
-            .outerjoin(Document, KnowledgeUnit.document_id == Document.id)
-            .where(KnowledgeUnit.id.in_(all_unit_ids))
-        )
-        doc_info = {str(row[0]): row[1] or "未知教材" for row in r.all()}
-
-    for u in window_units:
-        u["kp_path"] = kp_info.get(u["kp_id"], "")
-        u["filename"] = doc_info.get(u["uuid"], "未知教材")
-
-    # query-unit 重排序
-    if query and reranker is not None and len(window_units) > 10:
-        print(f"[kp_expand] query-unit 重排序, 窗口unit数={len(window_units)}")
+    # 两阶段过滤：粗排(关键词) → 精排(cross-encoder)
+    N_COARSE = 30  # 粗排保留数，≤30 直接精排
+    if query and reranker is not None and len(all_units) > N_COARSE:
+        import time as _time
+        print(f"[kp_expand] 两阶段过滤: 全量={len(all_units)} → 粗排top-{N_COARSE} → 精排")
+        t0 = _time.monotonic()
+        coarse = _fast_rank(query, all_units, top_k=N_COARSE)
+        print(f"[kp_expand] 粗排完成, 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
         try:
-            window_units = reranker.rerank(
-                query, window_units, top_k=len(window_units)
+            t1 = _time.monotonic()
+            all_units = reranker.rerank(query, coarse, top_k=len(coarse))
+            print(f"[kp_expand] 精排完成, 耗时={(_time.monotonic()-t1)*1000:.0f}ms")
+        except Exception:
+            all_units = coarse
+    elif query and reranker is not None and len(all_units) > 10:
+        print(f"[kp_expand] 全量精排, unit数={len(all_units)}")
+        try:
+            all_units = reranker.rerank(
+                query, all_units, top_k=len(all_units)
             )
         except Exception:
-            pass  # 重排序失败时保留原序
+            pass
 
-    # 组装上下文
+    # 组装上下文，重排序后高相关度 unit 优先
     grouped: dict[str, list[dict]] = {}
-    for u in window_units:
+    for u in all_units:
         grouped.setdefault(u["kp_path"], []).append(u)
 
-    # kp_path -> rank 映射（用于保持 KP 排列顺序）
     path_rank: dict[str, int] = {}
     for kp_id, rank in kp_order.items():
-        path = kp_info.get(kp_id, "")
-        if path:
-            path_rank[path] = rank
+        for u in all_units:
+            if u["kp_id"] == kp_id:
+                path_rank[u["kp_path"]] = rank
+                break
     kp_paths = sorted(grouped.keys(), key=lambda p: path_rank.get(p, 99))
 
     parts: list[str] = []

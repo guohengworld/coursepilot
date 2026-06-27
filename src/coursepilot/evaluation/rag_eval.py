@@ -411,9 +411,12 @@ class RAGEvaluator:
     async def _judge_context_precision(
         self, question: str, top_kp_ids: list[str], session: AsyncSession
     ) -> float:
-        """LLM-as-Judge: KP 级判定，每 KP 拼接全部 unit 后截断一次 judge"""
+        """LLM-as-Judge: KP 级判定，用关键词粗排选最相关 unit 后 judge"""
         if not top_kp_ids:
             return 0.0
+
+        import re as _re
+        q_tokens = set(_re.findall(r"[一-鿿]+|[a-zA-Z0-9]+", question.lower()))
 
         kp_ids = top_kp_ids[:5]
         relevant_kps = 0
@@ -422,7 +425,21 @@ class RAGEvaluator:
             units = await self._load_units_by_kp(session, kp_id)
             if not units:
                 continue
-            combined = "\n\n".join(units)[:3000]
+
+            # 关键词粗排：对每个 unit 算 Jaccard 重叠，取 top-8 拼接
+            scored: list[tuple[str, float]] = []
+            for content in units:
+                u_tokens = set(_re.findall(r"[一-鿿]+|[a-zA-Z0-9]+", content.lower()))
+                if u_tokens and q_tokens:
+                    score = len(q_tokens & u_tokens) / len(q_tokens | u_tokens)
+                else:
+                    score = 0.0
+                scored.append((content, score))
+            scored.sort(key=lambda x: x[1], reverse=True)
+            combined = "\n\n".join(c[:500] for c, _ in scored[:8])[:3000]
+
+            if not combined.strip():
+                continue
             try:
                 answer = await self._llm_judge(
                     JUDGE_CONTEXT_PRECISION_PROMPT.format(
