@@ -67,7 +67,6 @@ class Generator:
         course_context: dict,
         *,
         temperature: float | None = None,
-        max_tokens: int = 2000,
     ) -> str:
         """生成回答
 
@@ -75,7 +74,6 @@ class Generator:
         :param context: 格式化后的教材内容（XML source 标签）
         :param course_context: {name, textbook, chapters} 或 None
         :param temperature: LLM 温度，默认从 settings 读取
-        :param max_tokens: 最大输出 token 数
         """
         if not self.api_key:
             return "错误：LLM API Key 未配置，无法生成回答"
@@ -97,7 +95,7 @@ class Generator:
                 {"role": "user", "content": query},
             ],
             temperature=temperature if temperature is not None else settings.llm_temperature,
-            max_tokens=max_tokens
+            # max_tokens=max_tokens
         )
         return response.choices[0].message.content
 

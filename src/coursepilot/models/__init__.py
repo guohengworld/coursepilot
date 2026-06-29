@@ -11,17 +11,20 @@
       └──1:N──→ Document ──N:1──→ Course ➝ KnowledgePoint ➝ KnowledgeUnit
 """
 
-from coursepilot.models.user import User
+from coursepilot.models.agent_session import AgentSession
+from coursepilot.models.audit_log import AuditLog
 from coursepilot.models.course import Course
+from coursepilot.models.diagnosis_report import DiagnosisReport
+from coursepilot.models.document import Document
+from coursepilot.models.eval_metric import EvalMetric
 from coursepilot.models.knowledge_point import KnowledgePoint
 from coursepilot.models.knowledge_unit import KnowledgeUnit
-from coursepilot.models.document import Document
-from coursepilot.models.question import Question
-from coursepilot.models.qa_record import QARecord
 from coursepilot.models.practice_record import PracticeRecord
-from coursepilot.models.diagnosis_report import DiagnosisReport
+from coursepilot.models.qa_record import QARecord
+from coursepilot.models.question import Question
 from coursepilot.models.review_plan import ReviewPlan
-from coursepilot.models.eval_metric import EvalMetric
+from coursepilot.models.user import User
+from coursepilot.models.user_profile import UserProfile
 
 __all__ = [
     "User",
@@ -35,4 +38,7 @@ __all__ = [
     "DiagnosisReport",
     "ReviewPlan",
     "EvalMetric",
+    "AgentSession",
+    "UserProfile",
+    "AuditLog",
 ]

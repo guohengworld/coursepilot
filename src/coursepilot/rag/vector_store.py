@@ -185,7 +185,7 @@ class VectorStore:
         dense_req = AnnSearchRequest(
             data=[dense_vec],
             anns_field="dense_vec",
-            param={"metric_type": "IP", "params": {"nprobe": 16}},
+            param={"metric_type": "IP", "params": {}},
             limit=config.dense_top_k,
         )
 
@@ -200,7 +200,7 @@ class VectorStore:
             )
             search_requests.append(sparse_req)
 
-        filter_expr = f'course_id == "{course_id}"'
+        filter_expr = {"course_id": course_id}
 
         print(f"[vector_store] hybrid_search 开始 (course={course_id}, dense_top_k={config.dense_top_k}, sparse={config.enable_sparse})")
         t0 = __import__("time").monotonic()
@@ -271,6 +271,7 @@ class VectorStore:
         """查询某课程的全部向量元数据（不含向量本身）"""
         self._ensure_loaded()
         filter_expr = f'course_id == "{course_id}"'
+        print(f"查询条件: {filter_expr}")  # 确认条件正确
         return self.client.query(
             collection_name=COLLECTION_NAME,
             filter=filter_expr,

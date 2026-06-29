@@ -8,7 +8,6 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 # 项目根目录（config.py 位于 src/coursepilot/，上溯三级）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -16,6 +15,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 class Settings(BaseSettings):
     # ── 数据库 ──────────────────────────────────────────
     database_url: str = ""
+    database_url_sync: str = ""   # PostgresSaver 同步连接（langgraph checkpoint）
     db_pool_size: int = 5
     db_max_overflow: int = 10
 
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     level_penalty: float = 0.1  # 层级不匹配惩罚系数
 
     # ── Milvus ─────────────────────────────────────────
-    milvus_uri: str = "./data/milvus/milvus.db"     # Milvus Lite 存储路径
+    milvus_uri: str = "../../data/milvus/milvus.db"     # Milvus Lite 存储路径
     milvus_collection: str = "coursepilot_knowledge"
 
     # ── Ingestion ───────────────────────────────────────
