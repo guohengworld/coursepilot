@@ -43,3 +43,13 @@ async def require_superuser(
         )
     return current_user
 
+async def require_teacher(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Teacher 及以上权限校验（teacher / super）。"""
+    if current_user.role not in ("teacher", "super"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权限",
+        )
+    return current_user
