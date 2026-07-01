@@ -44,11 +44,15 @@ class VectorStore:
     def __init__(self, db_path: str | None = None):
         from pymilvus import MilvusClient
 
-        db_path = db_path or str(Path(settings.milvus_uri))
+        if db_path is None:
+            db_path = settings.milvus_uri
+            # 如果是相对路径，基于项目根目录转成绝对路径
+            if not Path(db_path).is_absolute():
+                from coursepilot.config import _PROJECT_ROOT
+                db_path = str(_PROJECT_ROOT / db_path)
+
         # 确保目录存在
-        db_dir = Path(db_path).parent
-        if db_dir != Path("."):
-            db_dir.mkdir(parents=True, exist_ok=True)
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
         logger.info("连接 Milvus Lite: %s", db_path)
         self.client = MilvusClient(
@@ -118,13 +122,8 @@ class VectorStore:
         logger.info("创建 collection %s 成功", COLLECTION_NAME)
 
     def _ensure_loaded(self) -> None:
-        """确保 collection 已加载到内存（Milvus Lite 重启后需显式 load）"""
-        print("[vector_store] _ensure_loaded 开始...")
-        try:
-            self.client.load_collection(COLLECTION_NAME)
-            print("[vector_store] _ensure_loaded 完成")
-        except Exception as e:
-            print(f"[vector_store] _ensure_loaded 异常(忽略): {e}")
+        """确保 collection 存在并已加载（幂等）"""
+        self.create_collection()
 
     # == CRUD
 

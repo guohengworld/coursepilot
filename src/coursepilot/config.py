@@ -6,6 +6,7 @@
 """
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 项目根目录（config.py 位于 src/coursepilot/，上溯三级）
@@ -37,8 +38,8 @@ class Settings(BaseSettings):
     level_penalty: float = 0.1  # 层级不匹配惩罚系数
 
     # ── Milvus ─────────────────────────────────────────
-    milvus_uri: str = "../../data/milvus/milvus.db"     # Milvus Lite 存储路径
-    milvus_collection: str = "coursepilot_knowledge"
+    milvus_uri: str = "data/milvus/milvus.db"     # Milvus Lite 存储路径（基于项目根目录的相对路径，也支持绝对路径）
+    milvus_collection: str = "knowledge_units"
 
     # ── Ingestion ───────────────────────────────────────
     pdf_heading_font_min: int = 14   # 识别为标题的最小字号
@@ -47,16 +48,15 @@ class Settings(BaseSettings):
 
     # ── MinerU ────────────────────────────────────────
     mineru_backend: str = "pipeline"       # pipeline / hybrid-engine
-    mineru_method: str = "auto"            # auto / txt / ocr（auto = 文字页跳过 OCR）
+    mineru_method: str = "auto"            # auto / txt / ocr
     mineru_lang: str = "ch"               # 文档主要语言
     mineru_output_dir: str = "./parsed"     # MinerU 输出根目录
     mineru_model_source: str = "local"     # local / huggingface / modelscope
-    mineru_formula_enable: bool = True     # 公式识别（Phase A 可关闭）
-    mineru_table_enable: bool = True       # 表格识别（Phase A 可关闭）
-
+    mineru_formula_enable: bool = True     # 公式识别
+    mineru_table_enable: bool = True       # 表格识别
 
     # ── JWT ────────────────────────────────────────────
-    jwt_secret_key: str = ""  # 从 .env 加载，为空则启动时报错
+    jwt_secret_key: str = ""  # 从 .env 加载
     jwt_algorithm: str = "HS256"
     jwt_expire_seconds: int = 86400  # 24 小时
 
