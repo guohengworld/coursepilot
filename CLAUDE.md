@@ -32,9 +32,20 @@ PYTHONPATH=src .venv/Scripts/python -m scripts.seed_knowledge "tests/fixtures/pd
 # 批量导入全部 8 本教材（5 门课程）
 PYTHONPATH=src .venv/Scripts/python -m scripts.batch_ingest
 
+# 格式化检查
+.venv/Scripts/ruff format --check src/ tests/
+
+# 启动数据库（PostgreSQL）
+docker compose up -d
+docker compose down
+
+# 启动 Streamlit UI
+.venv/Scripts/python -m streamlit run src/coursepilot/ui/app.py
+
 # RAGAS 评估
 PYTHONPATH=src EMBEDDING_MODEL_PATH="F:/all-projs/models/bge-m3" .venv/Scripts/python -m eval.eval_ragas baseline
 PYTHONPATH=src EMBEDDING_MODEL_PATH="F:/all-projs/models/bge-m3" .venv/Scripts/python -m eval.eval_ragas grid --stage 1
+PYTHONPATH=src EMBEDDING_MODEL_PATH="F:/all-projs/models/bge-m3" .venv/Scripts/python -m eval.eval_ragas compare
 
 # Alembic 数据库迁移
 alembic revision --autogenerate -m "描述信息"
@@ -77,19 +88,32 @@ CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技�
 | src/coursepilot/knowledge/kp_splitter.py | KPSplitter — 将文本块匹配到 KP（精确匹配→清洗后匹配→关键词匹配→根节点回退） |
 | src/coursepilot/knowledge/syllabus_parser.py | SyllabusParser — Markdown/中文编号大纲 → 树节点 |
 | src/coursepilot/knowledge/kp_tree.py | KPTree — 递归 CTE 查询，使用 parent_id 回填的批量插入 |
-| src/coursepilot/storage/file_store.py | FileStore — 本地文件系统存储，文件保存在 data/uploads// 下，使用 UUID 命名 |
+| src/coursepilot/storage/file_store.py | FileStore — 本地文件系统存储，文件保存在 data/uploads/ 下，使用 UUID 命名 |
 | src/coursepilot/rag/vector_store.py | VectorStore — Milvus Lite 向量存储 CRUD + 混合检索 + RRF |
 | src/coursepilot/rag/encoder.py | Encoder — BGE-M3 编码器（dense 1024-dim + sparse） |
 | src/coursepilot/rag/retriever.py | Retriever — 五阶段检索编排（改写→编码→检索→重排序→KP 扩展） |
 | src/coursepilot/rag/reranker.py | Reranker — bge-reranker-v2-m3 cross-encoder 重排序 |
 | src/coursepilot/rag/generator.py | Generator — DeepSeek LLM 生成（含流式 SSE） |
 | src/coursepilot/rag/query_rewriter.py | QueryRewriter — DeepSeek 查询改写 |
+| src/coursepilot/rag/summary_bridge.py | SummaryBridge — 知识单元摘要并发生成（thinking=disabled） |
+| src/coursepilot/rag/citation.py | Citation — 引用来源格式化 |
 | src/coursepilot/evaluation/rag_eval.py | RAGEvaluator — RAGAS 四大指标评估器 |
+| src/coursepilot/ui/app.py | Streamlit UI 前端（问答、学习报告） |
 | scripts/seed_knowledge.py | CLI 工具：解析 PDF → 提取标题 → 构建 KP 树；--ingest 参数可同时执行知识单元导入 |
 | scripts/batch_ingest.py | 批量处理 tests/fixtures/pdfs/ 下的全部 8 个 PDF，按课程分组 |
+| scripts/rebuild_all.py | 清空重建所有课程的知识点和知识单元 |
 | eval/eval_ragas.py | RAGAS 评估 CLI（baseline / grid / compare） |
-| data/milvus/ | Milvus Lite 向量数据库文件 |
-| data/parsed/ | MinerU 解析输出（临时调试用） |
+
+## 数据目录
+
+- `data/milvus/` — Milvus Lite 向量数据库文件
+- `data/parsed/` — MinerU 解析输出（临时调试用）
+- `data/uploads/` — 上传的文件存储
+
+## API 设计文档
+
+- `docs/pipeline/` — 导入管道设计文档
+- `docs/rag/` — RAG 引擎设计文档
 
 ## 数据库模型（11 张表）
 
@@ -111,7 +135,7 @@ CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技�
 
 ## 测试结构
 
-```
+```text
 tests/
 ├── unit/               # 单元测试（无需数据库/外部服务）
 │   ├── test_week2.py   # 解析器、大纲提取、KP 分割器、文件存储 (56 tests)
