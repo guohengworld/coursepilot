@@ -1,9 +1,5 @@
-"""Agent 模块入口 —— 导出编译后的 LangGraph 应用
+"""Agent 模块入口
 
-用法：
-    from coursepilot.agent import graph_app
-    result = await graph_app.ainvoke(state, config)
+build_agent_graph 为 async，需 await 调用。
+agent.py 的 _get_graph() 实现了延迟初始化缓存。
 """
-from coursepilot.agent.graph import build_agent_graph
-
-graph_app = build_agent_graph()

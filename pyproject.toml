@@ -55,6 +55,9 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+markers = [
+    "e2e: 端到端测试（全 mock 外部依赖）",
+]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu126" }

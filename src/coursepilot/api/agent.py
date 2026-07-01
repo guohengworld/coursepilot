@@ -41,10 +41,10 @@ class SessionStatusResponse(BaseModel):
 # Graph 实例（模块级缓存）
 _graph_app = None
 
-def _get_graph():
+async def _get_graph():
     global _graph_app
     if _graph_app is None:
-        _graph_app = build_agent_graph()
+        _graph_app = await build_agent_graph()
     return _graph_app
 
 # API 端点
@@ -85,7 +85,7 @@ async def chat(
     }
 
     # 3. 执行 LangGraph
-    graph = _get_graph()
+    graph = await _get_graph()
     config = {"configurable": {"thread_id": str(agent_session.id)}}
     result = await graph.ainvoke(initial_state, config)
 
