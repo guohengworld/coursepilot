@@ -104,8 +104,8 @@ class TestGraphStructure:
     """验证 StateGraph 拓扑：4 节点、线性边、AsyncPostgresSaver"""
 
     @pytest.mark.asyncio
-    async def test_graph_has_four_nodes(self):
-        """build_agent_graph() 注册了 4 个自定义节点"""
+    async def test_graph_has_ten_nodes(self):
+        """build_agent_graph() 注册了 10 个自定义节点（Phase 1: 4 + Phase 2: 6）"""
         from langgraph.checkpoint.memory import MemorySaver
 
         with patch("coursepilot.agent.graph._get_saver", return_value=MemorySaver()):
@@ -113,7 +113,7 @@ class TestGraphStructure:
             graph = await build_agent_graph()
 
         custom_nodes = {n for n in graph.nodes if not n.startswith("__")}
-        assert custom_nodes == {"build_context", "classify", "query_rag", "finalize"}
+        assert len(custom_nodes) == 10
 
     def test_graph_linear_edges_in_builder(self):
         """检查 builder 注册了正确的边"""
@@ -162,11 +162,11 @@ class TestGraphStructure:
         saver = await _get_saver()
         assert isinstance(saver, AsyncPostgresSaver)
 
-    def test_route_by_intent_stub(self):
-        """Phase 1 始终返回 'query_rag'"""
+    def test_route_by_intent_routes_properly(self):
+        """Phase 2 根据 inten 'query_rag'"""
         from coursepilot.agent.routing import route_by_intent
         assert route_by_intent({"intent": "question"}) == "query_rag"
-        assert route_by_intent({"intent": "practice"}) == "query_rag"
+        assert route_by_intent({"intent": "practice"}) == "get_mastery"
         assert route_by_intent({"intent": "unknown"}) == "query_rag"
         assert route_by_intent({}) == "query_rag"
 
