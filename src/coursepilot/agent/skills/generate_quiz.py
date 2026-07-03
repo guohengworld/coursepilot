@@ -44,7 +44,7 @@ async def generate_quiz(
         {"question": [...]}，空列表表示生成失败
     """
     if not settings.llm_api_key:
-        return {"question": []}
+        return {"questions": []}
 
     weak_kps = mastery.get("weak_kps", [])
     focus_hint = ""
@@ -73,7 +73,7 @@ async def generate_quiz(
         return json.loads(content)
     except (json.JSONDecodeError, TypeError):
         logger.warning("generate_quiz: LLM 返回非 JSON，回退空结果")
-        return {"question": []}
+        return {"questions": []}
 
 
 
