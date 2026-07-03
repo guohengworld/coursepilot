@@ -36,5 +36,17 @@ class AgentState(TypedDict):
     # 控制字段
     error: str | None           # 节点执行错误信息
 
+    # 掌握度
+    mastery: dict               # get_mastery 输出: {"mastery_level": {...}, "weak_kps": [...]}
 
+    # 练习
+    quiz_data: dict             # generate_quiz 输出: {"questions": [...]}
+    eval_result: dict           # evaluate_quiz 输出: {"status": "PASS"/"FAIL", "score": ..., "feedback": {...}}
+    retry_count: int            # evaluate 重试计数器（0/1/2）
+
+    # 诊断
+    diagnosis: dict             # diagnose 输出: {"weak_kps": [...], "kp_stats": {...}, "summary": "..."}
+
+    # 复习计划
+    review_plan: dict           # review_plan 输出: {"items": [...], "total_count": N, "plan_id": "..."}
 

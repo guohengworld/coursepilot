@@ -1,10 +1,15 @@
 """LangGraph 状态机构建
 
-Phase 1 线性路径：
-    build_context → classify → query_rag → finalize → END
-
-checkpointer 使用 AsyncPostgresSaver（异步 psycopg 连接），
-支持断点恢复和人类接管（Phase 3 启用）。
+Phase 2 拓扑（条件边 + 重试循环）：
+    START → build_context → classify → [route_by_intent]
+      ├→ query_rag → [route_after_rag] → finalize → END
+      │   └─ (practice/review) → generate_quiz → evaluate_quiz
+      │        └─ [route_after_evaluate]:
+      │            FAIL+retry<2 → generate_quiz (重试)
+      │            PASS+practice → create_plan → finalize
+      │            PASS+review → review_plan → finalize
+      ├→ get_mastery → query_rag → (同上)
+      └→ diagnose → finalize → END
 """
 import logging
 
@@ -13,10 +18,12 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import StateGraph, START, END
 
 from coursepilot.agent.nodes import (
-    build_context_node,
-    classify_node,
-    finalize_node,
-    query_rag_node,
+    build_context_node, classify_node, finalize_node, query_rag_node,
+    get_mastery_node, generate_quiz_node, evaluate_quiz_node,
+    create_plan_node, diagnose_node, review_plan_node
+)
+from coursepilot.agent.routing import (
+    route_by_intent, route_after_rag, route_after_evaluate,
 )
 from coursepilot.agent.state import AgentState
 from coursepilot.config import settings
@@ -51,13 +58,52 @@ async def build_agent_graph():
     builder.add_node("build_context", build_context_node)
     builder.add_node("classify", classify_node)
     builder.add_node("query_rag", query_rag_node)
+    builder.add_node("get_mastery", get_mastery_node)
+    builder.add_node("generate_quiz", generate_quiz_node)
+    builder.add_node("evaluate_quiz", evaluate_quiz_node)
+    builder.add_node("create_plan", create_plan_node)
+    builder.add_node("diagnose", diagnose_node)
+    builder.add_node("review_plan", review_plan_node)
     builder.add_node("finalize", finalize_node)
 
-    # Phase 1: 线性路径（无条件边）
     builder.add_edge(START, "build_context")
     builder.add_edge("build_context", "classify")
-    builder.add_edge("classify", "query_rag")
-    builder.add_edge("query_rag", "finalize")
+
+    # 条件边
+    # classify → intent 分发
+    builder.add_conditional_edges("classify", route_by_intent, {
+        "query_rag": "query_rag",
+        "get_mastery": "get_mastery",
+        "diagnose": "diagnose",
+    })
+
+    # get_mastery → 始终进 query_rag 获取教材内容
+    builder.add_edge("get_mastery", "query_rag")
+
+    # query_rag → 按 intent 决定是否继续出题
+    builder.add_conditional_edges("query_rag", route_after_rag, {
+        "generate_quiz": "generate_quiz",
+        "finalize": "finalize",
+    })
+
+    # generate_quiz → evaluate_quiz（固定边）
+    builder.add_edge("generate_quiz", "evaluate_quiz")
+
+    # evaluate_quiz → 重试 / 继续
+    builder.add_conditional_edges("evaluate_quiz", route_after_evaluate, {
+        "generate_quiz": "generate_quiz",
+        "review_plan": "review_plan",
+        "create_plan": "create_plan",
+        "finalize": "finalize",
+    })
+
+    # create_plan → finalize（固定边）
+    builder.add_edge("create_plan", "finalize")
+    # review_plan → finalize（固定边）
+    builder.add_edge("review_plan", "finalize")
+    # diagnose → finalize（固定边）
+    builder.add_edge("diagnose", "finalize")
+    # finalize → END
     builder.add_edge("finalize", END)
 
     # checkpointer：AsyncPostgresSaver
