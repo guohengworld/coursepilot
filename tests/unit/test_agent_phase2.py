@@ -25,6 +25,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
+ZERO_TOKENS = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
 
 # ═══════════════════════════════════════════════════════════════
 # Shared Fixtures
@@ -81,6 +83,7 @@ def sample_state():
         "answer": "",
         "sources": [],
         "token_count": 0,
+        "llm_calls": [],
         "error": None,
         "mastery": {},
         "quiz_data": {},
@@ -255,7 +258,7 @@ class TestGenerateQuiz:
         """无 API key 时返回空结果"""
         with patch("coursepilot.agent.skills.generate_quiz.settings.llm_api_key", ""):
             from coursepilot.agent.skills.generate_quiz import generate_quiz
-            result = await generate_quiz(
+            result, _ = await generate_quiz(
                 context="教材内容", course_context=course_context, mastery={}
             )
             assert result == {"questions": []}
@@ -270,6 +273,7 @@ class TestGenerateQuiz:
             '"options": {"A": "1", "B": "2", "C": "3", "D": "4"}, '
             '"correct_answer": "B", "explanation": "1+1=2", "kp_path": "OS/测试"}]}'
         )
+        mock_completion.usage = None
 
         with (
             patch("coursepilot.agent.skills.generate_quiz.settings.llm_api_key", "sk-test"),
@@ -280,7 +284,7 @@ class TestGenerateQuiz:
             client.chat.completions.create = AsyncMock(return_value=mock_completion)
 
             from coursepilot.agent.skills.generate_quiz import generate_quiz
-            result = await generate_quiz(
+            result, _ = await generate_quiz(
                 context="教材内容", course_context=course_context,
                 mastery={"weak_kps": ["OS/测试"]}
             )
@@ -296,6 +300,7 @@ class TestGenerateQuiz:
         mock_completion = MagicMock()
         mock_completion.choices = [MagicMock()]
         mock_completion.choices[0].message.content = "不是 JSON"
+        mock_completion.usage = None
 
         with (
             patch("coursepilot.agent.skills.generate_quiz.settings.llm_api_key", "sk-test"),
@@ -306,7 +311,7 @@ class TestGenerateQuiz:
             client.chat.completions.create = AsyncMock(return_value=mock_completion)
 
             from coursepilot.agent.skills.generate_quiz import generate_quiz
-            result = await generate_quiz(
+            result, _ = await generate_quiz(
                 context="教材内容", course_context=course_context, mastery={}
             )
             assert result == {"questions": []}
@@ -325,7 +330,7 @@ class TestEvaluateQuiz:
         """无 API key 时默认通过"""
         with patch("coursepilot.agent.skills.evaluate_quiz.settings.llm_api_key", ""):
             from coursepilot.agent.skills.evaluate_quiz import evaluate_quiz
-            result = await evaluate_quiz(
+            result, _ = await evaluate_quiz(
                 quiz_data={"questions": [{"question_text": "测试"}]},
                 context="", course_context={}
             )
@@ -337,7 +342,7 @@ class TestEvaluateQuiz:
         """题目为空时返回 FAIL（需要 API key 绕过前置 PASS 逻辑）"""
         with patch("coursepilot.agent.skills.evaluate_quiz.settings.llm_api_key", "sk-test"):
             from coursepilot.agent.skills.evaluate_quiz import evaluate_quiz
-            result = await evaluate_quiz(quiz_data={}, context="", course_context={})
+            result, _ = await evaluate_quiz(quiz_data={}, context="", course_context={})
             assert result["status"] == "FAIL"
             assert result["score"] == 0.0
 
@@ -349,6 +354,7 @@ class TestEvaluateQuiz:
         mock_completion.choices[0].message.content = (
             '{"status": "PASS", "score": 0.9, "feedback": {"suggestions": ["无问题"]}}'
         )
+        mock_completion.usage = None
 
         with (
             patch("coursepilot.agent.skills.evaluate_quiz.settings.llm_api_key", "sk-test"),
@@ -359,7 +365,7 @@ class TestEvaluateQuiz:
             client.chat.completions.create = AsyncMock(return_value=mock_completion)
 
             from coursepilot.agent.skills.evaluate_quiz import evaluate_quiz
-            result = await evaluate_quiz(
+            result, _ = await evaluate_quiz(
                 quiz_data={"questions": [{"question_text": "测试"}]},
                 context="教材", course_context={}
             )
@@ -372,6 +378,7 @@ class TestEvaluateQuiz:
         mock_completion = MagicMock()
         mock_completion.choices = [MagicMock()]
         mock_completion.choices[0].message.content = "不是 JSON"
+        mock_completion.usage = None
 
         with (
             patch("coursepilot.agent.skills.evaluate_quiz.settings.llm_api_key", "sk-test"),
@@ -382,7 +389,7 @@ class TestEvaluateQuiz:
             client.chat.completions.create = AsyncMock(return_value=mock_completion)
 
             from coursepilot.agent.skills.evaluate_quiz import evaluate_quiz
-            result = await evaluate_quiz(
+            result, _ = await evaluate_quiz(
                 quiz_data={"questions": [{"question_text": "测试"}]},
                 context="", course_context={}
             )
@@ -521,7 +528,7 @@ class TestReviewPlan:
     async def test_returns_empty_when_no_weak_kps(self, mock_db):
         """无薄弱知识点时返回空计划"""
         from coursepilot.agent.skills.review_plan import review_plan
-        plan = await review_plan(
+        plan, _ = await review_plan(
             session=mock_db,
             user_id=str(uuid4()),
             course_id=str(uuid4()),
@@ -535,7 +542,7 @@ class TestReviewPlan:
         """无 API key 时生成简单的默认计划"""
         with patch("coursepilot.agent.skills.review_plan.settings.llm_api_key", ""):
             from coursepilot.agent.skills.review_plan import review_plan
-            plan = await review_plan(
+            plan, _ = await review_plan(
                 session=mock_db,
                 user_id=str(uuid4()),
                 course_id=str(uuid4()),
@@ -560,6 +567,7 @@ class TestReviewPlan:
             '{"items": [{"kp_path": "OS/进程同步", "priority": 1, "reason": "薄弱", "status": "pending"}], '
             '"total_count": 1, "plan_summary": "复习计划摘要"}'
         )
+        mock_completion.usage = None
 
         with patch("coursepilot.agent.skills.review_plan.settings.llm_api_key", "sk-test"):
             with patch("coursepilot.agent.skills.review_plan.AsyncOpenAI") as mock_openai:
@@ -568,7 +576,7 @@ class TestReviewPlan:
                 client.chat.completions.create = AsyncMock(return_value=mock_completion)
 
                 from coursepilot.agent.skills.review_plan import review_plan
-                plan = await review_plan(
+                plan, _ = await review_plan(
                     session=mock_db,
                     user_id=str(uuid4()),
                     course_id=str(uuid4()),
@@ -588,7 +596,7 @@ class TestReviewPlan:
             from coursepilot.models import ReviewPlan
             from coursepilot.agent.skills.review_plan import review_plan
 
-            plan = await review_plan(
+            plan, _ = await review_plan(
                 session=mock_db,
                 user_id=str(uuid4()),
                 course_id=str(uuid4()),
@@ -647,9 +655,9 @@ class TestPhase2Nodes:
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.generate_quiz") as mock_gq,
         ):
-            mock_gq.return_value = {
+            mock_gq.return_value = ({
                 "questions": [{"question_text": "1+1=?", "correct_answer": "B"}]
-            }
+            }, ZERO_TOKENS)
             from coursepilot.agent.nodes import generate_quiz_node
             result = await generate_quiz_node(sample_state)
 
@@ -667,7 +675,7 @@ class TestPhase2Nodes:
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.generate_quiz") as mock_gq,
         ):
-            mock_gq.return_value = {}
+            mock_gq.return_value = {}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             from coursepilot.agent.nodes import generate_quiz_node
             await generate_quiz_node(sample_state)
 
@@ -697,7 +705,7 @@ class TestPhase2Nodes:
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.evaluate_quiz") as mock_eq,
         ):
-            mock_eq.return_value = {"status": "PASS", "score": 0.9}
+            mock_eq.return_value = {"status": "PASS", "score": 0.9}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             from coursepilot.agent.nodes import evaluate_quiz_node
             result = await evaluate_quiz_node(sample_state)
 
@@ -715,7 +723,7 @@ class TestPhase2Nodes:
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.evaluate_quiz") as mock_eq,
         ):
-            mock_eq.return_value = {"status": "FAIL", "score": 0.3}
+            mock_eq.return_value = {"status": "FAIL", "score": 0.3}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             from coursepilot.agent.nodes import evaluate_quiz_node
             result = await evaluate_quiz_node(sample_state)
 
@@ -732,7 +740,7 @@ class TestPhase2Nodes:
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.evaluate_quiz") as mock_eq,
         ):
-            mock_eq.return_value = {"status": "PASS", "score": 1.0}
+            mock_eq.return_value = {"status": "PASS", "score": 1.0}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             from coursepilot.agent.nodes import evaluate_quiz_node
             await evaluate_quiz_node(sample_state)
 
@@ -811,12 +819,7 @@ class TestPhase2Nodes:
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.review_plan") as mock_rp,
         ):
-            mock_rp.return_value = {
-                "items": [{"kp_path": "OS/进程同步", "priority": 1}],
-                "total_count": 1,
-                "plan_summary": "复习计划摘要",
-                "plan_id": str(uuid4()),
-            }
+            mock_rp.return_value = {"items": [{"kp_path": "OS/进程同步", "priority": 1}], "total_count": 1, "plan_summary": "复习计划摘要", "plan_id": str(uuid4())}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             from coursepilot.agent.nodes import review_plan_node
             result = await review_plan_node(sample_state)
 
@@ -1043,12 +1046,12 @@ class TestPhase2E2E:
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.build_context_logic") as mock_bc,
-            patch("coursepilot.agent.nodes.classify_intent", return_value="question"),
+            patch("coursepilot.agent.nodes.classify_intent", return_value=("question", ZERO_TOKENS)),
             patch("coursepilot.agent.nodes.query_rag") as mock_qr,
             patch("coursepilot.agent.nodes.update_qa_record") as mock_uq,
         ):
             mock_bc.return_value = ({"name": "OS"}, None, [])
-            mock_qr.return_value = ("进程调度是核心功能", "上下文", {"source_kp_paths": ["OS/进程调度"]}, [])
+            mock_qr.return_value = ("进程调度是核心功能", "上下文", {"source_kp_paths": ["OS/进程调度"]}, [], ZERO_TOKENS)
             mock_uq.return_value = 42
 
             result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid4())}})
@@ -1066,7 +1069,7 @@ class TestPhase2E2E:
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.build_context_logic") as mock_bc,
-            patch("coursepilot.agent.nodes.classify_intent", return_value="practice"),
+            patch("coursepilot.agent.nodes.classify_intent", return_value=("practice", ZERO_TOKENS)),
             patch("coursepilot.agent.nodes.get_mastery") as mock_gm,
             patch("coursepilot.agent.nodes.query_rag") as mock_qr,
             patch("coursepilot.agent.nodes.generate_quiz") as mock_gq,
@@ -1075,12 +1078,12 @@ class TestPhase2E2E:
         ):
             mock_bc.return_value = ({"name": "OS"}, None, [])
             mock_gm.return_value = {"mastery_level": {}, "weak_kps": ["OS/进程同步"], "avg_correct_rate": 0.5}
-            mock_qr.return_value = ("教材上下文", "", {}, [])
-            mock_gq.return_value = {"questions": [
+            mock_qr.return_value = ("教材上下文", "", {}, [], ZERO_TOKENS)
+            mock_gq.return_value = ({"questions": [
                 {"question_text": "进程同步?", "options": {"A": "1", "B": "2"},
                  "correct_answer": "B", "kp_path": "OS/进程同步"},
-            ]}
-            mock_eq.return_value = {"status": "PASS", "score": 0.9}
+            ]}, ZERO_TOKENS)
+            mock_eq.return_value = {"status": "PASS", "score": 0.9}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             mock_uq.return_value = 0
 
             result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid4())}})
@@ -1100,7 +1103,7 @@ class TestPhase2E2E:
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.build_context_logic") as mock_bc,
-            patch("coursepilot.agent.nodes.classify_intent", return_value="diagnose"),
+            patch("coursepilot.agent.nodes.classify_intent", return_value=("diagnose", ZERO_TOKENS)),
             patch("coursepilot.agent.nodes.diagnose") as mock_diag,
             patch("coursepilot.agent.nodes.update_qa_record") as mock_uq,
         ):
@@ -1129,7 +1132,7 @@ class TestPhase2E2E:
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.build_context_logic") as mock_bc,
-            patch("coursepilot.agent.nodes.classify_intent", return_value="review"),
+            patch("coursepilot.agent.nodes.classify_intent", return_value=("review", ZERO_TOKENS)),
             patch("coursepilot.agent.nodes.get_mastery") as mock_gm,
             patch("coursepilot.agent.nodes.query_rag") as mock_qr,
             patch("coursepilot.agent.nodes.generate_quiz") as mock_gq,
@@ -1139,18 +1142,13 @@ class TestPhase2E2E:
         ):
             mock_bc.return_value = ({"name": "OS"}, None, [])
             mock_gm.return_value = {"mastery_level": {}, "weak_kps": ["OS/进程同步"], "avg_correct_rate": 0.5}
-            mock_qr.return_value = ("上下文", "", {}, [])
-            mock_gq.return_value = {"questions": [
+            mock_qr.return_value = ("上下文", "", {}, [], ZERO_TOKENS)
+            mock_gq.return_value = ({"questions": [
                 {"question_text": "进程同步?", "options": {"A": "1", "B": "2"},
                  "correct_answer": "B", "kp_path": "OS/进程同步"},
-            ]}
-            mock_eq.return_value = {"status": "PASS", "score": 0.9}
-            mock_rp.return_value = {
-                "items": [{"kp_path": "OS/进程同步", "priority": 1}],
-                "total_count": 1,
-                "plan_summary": "复习计划摘要",
-                "plan_id": str(uuid4()),
-            }
+            ]}, ZERO_TOKENS)
+            mock_eq.return_value = {"status": "PASS", "score": 0.9}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            mock_rp.return_value = {"items": [{"kp_path": "OS/进程同步", "priority": 1}], "total_count": 1, "plan_summary": "复习计划摘要", "plan_id": str(uuid4())}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             mock_uq.return_value = 0
 
             result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid4())}})
@@ -1167,12 +1165,12 @@ class TestPhase2E2E:
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.build_context_logic") as mock_bc,
-            patch("coursepilot.agent.nodes.classify_intent", return_value="code_help"),
+            patch("coursepilot.agent.nodes.classify_intent", return_value=("code_help", ZERO_TOKENS)),
             patch("coursepilot.agent.nodes.query_rag") as mock_qr,
             patch("coursepilot.agent.nodes.update_qa_record") as mock_uq,
         ):
             mock_bc.return_value = ({"name": "OS"}, None, [])
-            mock_qr.return_value = ("代码相关回答", "上下文", {}, [])
+            mock_qr.return_value = ("代码相关回答", "上下文", {}, [], ZERO_TOKENS)
             mock_uq.return_value = 0
 
             result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid4())}})
@@ -1195,12 +1193,12 @@ class TestPhase2E2E:
 
         def evaluate_side_effect(**kw):
             evaluate_call_count[0] += 1
-            return {"status": "FAIL", "score": 0.3, "feedback": {"suggestions": ["题目太简单"]}}
+            return ({"status": "FAIL", "score": 0.3, "feedback": {"suggestions": ["题目太简单"]}}, ZERO_TOKENS)
 
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.build_context_logic") as mock_bc,
-            patch("coursepilot.agent.nodes.classify_intent", return_value="practice"),
+            patch("coursepilot.agent.nodes.classify_intent", return_value=("practice", ZERO_TOKENS)),
             patch("coursepilot.agent.nodes.get_mastery") as mock_gm,
             patch("coursepilot.agent.nodes.query_rag") as mock_qr,
             patch("coursepilot.agent.nodes.generate_quiz") as mock_gq,
@@ -1209,8 +1207,8 @@ class TestPhase2E2E:
         ):
             mock_bc.return_value = ({"name": "OS"}, None, [])
             mock_gm.return_value = {"mastery_level": {}, "weak_kps": [], "avg_correct_rate": None}
-            mock_qr.return_value = ("上下文", "", {}, [])
-            mock_gq.return_value = {"questions": []}
+            mock_qr.return_value = ("上下文", "", {}, [], ZERO_TOKENS)
+            mock_gq.return_value = ({"questions": []}, ZERO_TOKENS)
             mock_uq.return_value = 0
 
             result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid4())}})

@@ -29,6 +29,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
+ZERO_TOKENS = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
 
 # ═══════════════════════════════════════════════════════════════
 # Shared Fixtures
@@ -92,6 +94,7 @@ def sample_state():
         "answer": "",
         "sources": [],
         "token_count": 0,
+        "llm_calls": [],
         "error": None,
     }
 
@@ -187,11 +190,13 @@ class TestClassifyIntent:
             completion = AsyncMock()
             completion.choices = [AsyncMock()]
             completion.choices[0].message.content = "question"
+            completion.usage = None
             client.chat.completions.create = AsyncMock(return_value=completion)
 
             from coursepilot.agent.skills.classify_intent import classify_intent
-            intent = await classify_intent("什么是二叉树？")
+            intent, tokens = await classify_intent("什么是二叉树？")
             assert intent == "question"
+            assert tokens == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     @pytest.mark.asyncio
     async def test_classify_practice(self):
@@ -202,10 +207,11 @@ class TestClassifyIntent:
             completion = AsyncMock()
             completion.choices = [AsyncMock()]
             completion.choices[0].message.content = "practice"
+            completion.usage = None
             client.chat.completions.create = AsyncMock(return_value=completion)
 
             from coursepilot.agent.skills.classify_intent import classify_intent
-            intent = await classify_intent("给我出几道题")
+            intent, _ = await classify_intent("给我出几道题")
             assert intent == "practice"
 
     @pytest.mark.asyncio
@@ -213,7 +219,7 @@ class TestClassifyIntent:
         """无 API key 时回退到 question"""
         with patch("coursepilot.agent.skills.classify_intent.settings.llm_api_key", ""):
             from coursepilot.agent.skills.classify_intent import classify_intent
-            intent = await classify_intent("任何问题")
+            intent, _ = await classify_intent("任何问题")
             assert intent == "question"
 
     @pytest.mark.asyncio
@@ -225,10 +231,11 @@ class TestClassifyIntent:
             completion = AsyncMock()
             completion.choices = [AsyncMock()]
             completion.choices[0].message.content = "invalid_intent"
+            completion.usage = None
             client.chat.completions.create = AsyncMock(return_value=completion)
 
             from coursepilot.agent.skills.classify_intent import classify_intent
-            intent = await classify_intent("一些请求")
+            intent, _ = await classify_intent("一些请求")
             assert intent == "question"
 
     @pytest.mark.asyncio
@@ -240,10 +247,11 @@ class TestClassifyIntent:
             completion = AsyncMock()
             completion.choices = [AsyncMock()]
             completion.choices[0].message.content = "diagnose"
+            completion.usage = None
             client.chat.completions.create = AsyncMock(return_value=completion)
 
             from coursepilot.agent.skills.classify_intent import classify_intent
-            intent = await classify_intent("我哪里掌握得不好")
+            intent, _ = await classify_intent("我哪里掌握得不好")
             assert intent == "diagnose"
 
 
@@ -270,11 +278,11 @@ class TestQueryRAGSkill:
 
             gen_instance = AsyncMock()
             mock_gen.return_value = gen_instance
-            gen_instance.generate.return_value = "进程调度是操作系统核心功能..."
+            gen_instance.generate.return_value = "进程调度是操作系统核心功能...", ZERO_TOKENS
 
             from coursepilot.agent.skills.query_rag import query_rag
 
-            answer, context, metadata, sources = await query_rag(
+            answer, context, metadata, sources, _ = await query_rag(
                 session=mock_db,
                 query="什么是进程调度？",
                 course_id=str(uuid4()),
@@ -299,11 +307,11 @@ class TestQueryRAGSkill:
 
             gen_instance = AsyncMock()
             mock_gen.return_value = gen_instance
-            gen_instance.generate.return_value = "未找到相关信息"
+            gen_instance.generate.return_value = "未找到相关信息", ZERO_TOKENS
 
             from coursepilot.agent.skills.query_rag import query_rag
 
-            answer, context, metadata, sources = await query_rag(
+            answer, context, metadata, sources, _ = await query_rag(
                 session=mock_db,
                 query="不存在的知识",
                 course_id=str(uuid4()),
@@ -396,7 +404,6 @@ class TestUpdateQARecord:
         )
 
         assert agent_session.status == "completed"
-        assert agent_session.intent == "question"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -573,13 +580,14 @@ class TestNodes:
         """classify_node → intent 被设置"""
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
-            patch("coursepilot.agent.nodes.classify_intent", return_value="question"),
+            patch("coursepilot.agent.nodes.classify_intent", return_value=("question", ZERO_TOKENS)),
         ):
             from coursepilot.agent.nodes import classify_node
 
             result = await classify_node(sample_state)
 
         assert result["intent"] == "question"
+        assert len(result["llm_calls"]) == 1
         assert result["error"] is None
 
     @pytest.mark.asyncio
@@ -592,7 +600,7 @@ class TestNodes:
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.classify_intent") as mock_cls,
         ):
-            mock_cls.return_value = "question"
+            mock_cls.return_value = ("question", ZERO_TOKENS)
 
             from coursepilot.agent.nodes import classify_node
 
@@ -618,6 +626,7 @@ class TestNodes:
                 "检索到的上下文",
                 {"source_kp_paths": ["OS/进程调度"], "scores": [0.95]},
                 [{"kp_path": "OS/进程调度"}],
+                ZERO_TOKENS,
             )
 
             from coursepilot.agent.nodes import query_rag_node
@@ -630,23 +639,27 @@ class TestNodes:
 
     @pytest.mark.asyncio
     async def test_finalize_node(self, sample_state, mock_asf):
-        """finalize_node → QA 记录写入，token_count 返回"""
+        """finalize_node → QA 记录写入，token_count 汇总自 llm_calls"""
         sample_state.update({
             "answer": "最终答案",
             "context": "上下文",
             "sources": [{"kp_path": "OS/进程调度"}],
             "retrieved_metadata": {"source_kp_paths": ["OS/进程调度"]},
+            "llm_calls": [
+                {"node": "classify", "total_tokens": 15, "prompt_tokens": 10, "completion_tokens": 5},
+                {"node": "query_rag", "total_tokens": 50, "prompt_tokens": 30, "completion_tokens": 20},
+            ],
         })
 
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
-            patch("coursepilot.agent.nodes.update_qa_record", return_value=42),
+            patch("coursepilot.agent.nodes.update_qa_record") as mock_uq,
         ):
             from coursepilot.agent.nodes import finalize_node
 
             result = await finalize_node(sample_state)
 
-        assert result["token_count"] == 42
+        assert result["token_count"] == 65  # 15 + 50
         assert result["error"] is None
 
     @pytest.mark.asyncio
@@ -763,12 +776,13 @@ class TestAgentAPI:
                 patch("coursepilot.agent.nodes.update_qa_record") as mock_uq,
             ):
                 mock_bc.return_value = ({"course_name": "OS"}, None, [])
-                mock_cls.return_value = "question"
+                mock_cls.return_value = ("question", ZERO_TOKENS)
                 mock_qr.return_value = (
                     "进程调度是操作系统的核心功能",
                     "上下文",
                     {"source_kp_paths": ["OS/进程调度"]},
                     [{"kp_path": "OS/进程调度"}],
+                    ZERO_TOKENS,
                 )
                 mock_uq.return_value = 42
 
@@ -862,8 +876,11 @@ class TestEndToEnd:
             "answer": "",
             "sources": [],
             "token_count": 0,
+            "llm_calls": [],
             "error": None,
         }
+
+        mock_tokens = {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
 
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
@@ -873,14 +890,15 @@ class TestEndToEnd:
             patch("coursepilot.agent.nodes.update_qa_record") as mock_uq,
         ):
             mock_bc.return_value = ({"course_name": "OS"}, None, [])
-            mock_cls.return_value = "question"
+            mock_cls.return_value = ("question", mock_tokens)
             mock_qr.return_value = (
                 "进程调度是操作系统核心功能，例如 FCFS...",
                 "上下文内容",
                 {"source_kp_paths": ["OS/进程管理/进程调度"], "scores": [0.92]},
                 [{"kp_path": "OS/进程管理/进程调度"}],
+                mock_tokens,
             )
-            mock_uq.return_value = 128
+            mock_uq.return_value = 30
 
             result = await graph.ainvoke(initial_state, {"configurable": {"thread_id": str(uuid4())}})
 
@@ -888,7 +906,7 @@ class TestEndToEnd:
         assert result["intent"] == "question"
         assert "进程调度" in result["answer"]
         assert len(result["sources"]) >= 1
-        assert result["token_count"] == 128
+        assert result["token_count"] == 60  # 30 from classify + 30 from query_rag
 
     @pytest.mark.asyncio
     async def test_workflow_handles_node_error(self, mock_asf):
@@ -928,17 +946,18 @@ class TestEndToEnd:
             "answer": "",
             "sources": [],
             "token_count": 0,
+            "llm_calls": [],
             "error": None,
         }
 
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.build_context_logic", side_effect=RuntimeError("模拟错误")),
-            patch("coursepilot.agent.nodes.classify_intent", return_value="question"),
+            patch("coursepilot.agent.nodes.classify_intent", return_value=("question", ZERO_TOKENS)),
             patch("coursepilot.agent.nodes.query_rag") as mock_qr,
             patch("coursepilot.agent.nodes.update_qa_record") as mock_uq,
         ):
-            mock_qr.return_value = ("fallback answer", "", {}, [])
+            mock_qr.return_value = ("fallback answer", "", {}, [], ZERO_TOKENS)
             mock_uq.return_value = 0
 
             result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid4())}})
@@ -965,6 +984,7 @@ class TestAgentState:
             "messages", "course_context", "user_profile", "recent_qa",
             "intent", "context", "retrieved_metadata",
             "answer", "sources", "token_count", "error",
+            "llm_calls",
         }
         missing = expected_fields - set(hints)
         assert not missing, f"AgentState 缺少字段: {missing}"
