@@ -21,10 +21,10 @@ async def classify_intent(
     query: str,
     course_context: dict | None = None,
     recent_qa: list[dict] | None = None
-) -> str:
-    """返回意图名称"""
+) -> tuple[str, dict]:
+    """返回 (意图名称, token用量)"""
     if not settings.llm_api_key:
-        return "question"
+        return "question", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     parts = [f"用户问题：{query}"]
     if recent_qa:
@@ -46,5 +46,11 @@ async def classify_intent(
         max_tokens=20,
     )
     intent = response.choices[0].message.content.strip().lower()
+    usage = response.usage
+    token_info = {
+        "prompt_tokens": usage.prompt_tokens if usage else 0,
+        "completion_tokens": usage.completion_tokens if usage else 0,
+        "total_tokens": usage.total_tokens if usage else 0,
+    }
     valid = {"question", "practice", "diagnose", "review", "code_help"}
-    return intent if intent in valid else "question"
+    return (intent if intent in valid else "question"), token_info

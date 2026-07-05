@@ -37,14 +37,14 @@ async def generate_quiz(
     context: str,
     course_context: dict,
     mastery: dict,
-) -> dict:
+) -> tuple[dict, dict]:
     """生成 3 道练习题
 
     Returns:
-        {"question": [...]}，空列表表示生成失败
+        ({"questions": [...]}, token_info)
     """
     if not settings.llm_api_key:
-        return {"questions": []}
+        return {"questions": []}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     weak_kps = mastery.get("weak_kps", [])
     focus_hint = ""
@@ -69,11 +69,17 @@ async def generate_quiz(
         response_format={"type": "json_object"}
     )
     content = response.choices[0].message.content
+    usage = response.usage
+    token_info = {
+        "prompt_tokens": usage.prompt_tokens if usage else 0,
+        "completion_tokens": usage.completion_tokens if usage else 0,
+        "total_tokens": usage.total_tokens if usage else 0,
+    }
     try:
-        return json.loads(content)
+        return json.loads(content), token_info
     except (json.JSONDecodeError, TypeError):
         logger.warning("generate_quiz: LLM 返回非 JSON，回退空结果")
-        return {"questions": []}
+        return {"questions": []}, token_info
 
 
 

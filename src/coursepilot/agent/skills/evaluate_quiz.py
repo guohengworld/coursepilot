@@ -36,14 +36,19 @@ async def evaluate_quiz(
     quiz_data: dict,
     context: str,
     course_context: dict
-) -> dict:
-    """验证练习题质量"""
+) -> tuple[dict, dict]:
+    """验证练习题质量
+
+    Returns:
+        (eval_result, token_info)
+    """
+    empty_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     if not settings.llm_api_key:
         return {"status": "PASS", "score": 1.0,
-                "feedback": {"suggestions": ["无 API key，跳过验证"]}}
+                "feedback": {"suggestions": ["无 API key，跳过验证"]}}, empty_tokens
     if not quiz_data.get("questions"):
         return {"status": "FAIL", "score": 0.0,
-                "feedback": {"suggestions": ["题目为空"]}}
+                "feedback": {"suggestions": ["题目为空"]}}, empty_tokens
 
     client = AsyncOpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
     response = await client.chat.completions.create(
@@ -58,9 +63,15 @@ async def evaluate_quiz(
         response_format={"type": "json_object"}
     )
     content = response.choices[0].message.content
+    usage = response.usage
+    token_info = {
+        "prompt_tokens": usage.prompt_tokens if usage else 0,
+        "completion_tokens": usage.completion_tokens if usage else 0,
+        "total_tokens": usage.total_tokens if usage else 0,
+    }
     try:
-        return json.loads(content)
+        return json.loads(content), token_info
     except (json.JSONDecodeError, TypeError):
         logger.warning("evaluate_quiz: 解析审核结果失败，默认 PASS")
         return {"status": "PASS", "score": 0.8,
-                "feedback": {"suggestion": ["审核结果解析失败"]}}
+                "feedback": {"suggestion": ["审核结果解析失败"]}}, token_info

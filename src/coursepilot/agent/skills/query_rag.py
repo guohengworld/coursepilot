@@ -15,11 +15,11 @@ async def query_rag(
     query: str,
     course_id: str,
     course_context: dict,
-) -> tuple[str, str, dict, list[dict]]:
+) -> tuple[str, str, dict, list[dict], dict]:
     """执行完整 RAG 检索 + LLM 生成。
 
     Returns:
-        (answer, raw_context, metadata, sources)
+        (answer, raw_context, metadata, sources, token_info)
     """
     # 1. 五阶段检索
     retriever = Retriever()
@@ -31,9 +31,9 @@ async def query_rag(
 
     # 3. LLM 生成
     generator = Generator()
-    answer = await generator.generate(query, context, course_context)
+    answer, token_info = await generator.generate(query, context, course_context)
 
-    return answer, context, metadata, sources
+    return answer, context, metadata, sources, token_info
 
 
 
