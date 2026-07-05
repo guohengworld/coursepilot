@@ -316,7 +316,7 @@ async def ask_course(
     # 阶段 5：LLM 生成
     t0 = time.time()
     generator = Generator()
-    answer = await generator.generate(body.question, context, course_context)
+    answer, _ = await generator.generate(body.question, context, course_context)
     stages["generate_ms"] = round((time.time() - t0) * 1000, 1)
 
     # 引用提取

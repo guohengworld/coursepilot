@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coursepilot.agent.graph import build_agent_graph
 from coursepilot.api.deps import get_current_user
 from coursepilot.db import get_session
+from coursepilot.governance.guardrails import guard_token_limit
 from coursepilot.models import AgentSession, User
+
+from langgraph.types import Command
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -55,7 +58,22 @@ async def chat(
     session: AsyncSession = Depends(get_session),
 ):
     """主入口：发送消息给 Agent，执行完整 workflow 并返回回答"""
-    # 1. 创建会话记录
+    # ── RBAC 检查 ──
+    from coursepilot.governance.rbac import has_permission
+    if not has_permission(current_user.role, "agent:chat"):
+        raise HTTPException(status_code=403, detail="无权使用 Agent")
+
+    # ── Daily limit guard ──
+    from coursepilot.governance.guardrails import guard_daily_limit
+    from coursepilot.observability.metrics import get_today_token_usage
+    daily_tokens = await get_today_token_usage(str(current_user.id))
+    limit_msg = guard_token_limit(
+        session_token=0, daily_token=daily_tokens
+    )
+    if limit_msg:
+        raise HTTPException(status_code=429, detail=limit_msg)
+
+    # 创建会话记录
     agent_session = AgentSession(
         user_id=current_user.id,
         course_id=UUID(request.course_id),
@@ -81,6 +99,7 @@ async def chat(
         "answer": "",
         "sources": [],
         "token_count": 0,
+        "llm_calls": [],
         "error": None,
     }
 
@@ -133,31 +152,38 @@ async def approve_session(
     current_user: User = Depends(get_current_user),
     db_session: AsyncSession = Depends(get_session),
 ):
-    """人工审批（Phase 1 占位，Phase 3 实现 interrupt 恢复）。"""
+    """人工审批：恢复被 interrupt 暂停的图执行"""
+    from coursepilot.agent.graph import build_agent_graph
+    from coursepilot.governance.rbac import has_permission
+    if not has_permission(current_user.role, "agent:session:list_all"):
+        raise HTTPException(status_code=403, detail="无权审批")
+
+    # 1. 验证会话存在且属于当前用户
     result = await db_session.execute(
         select(AgentSession).where(AgentSession.id == UUID(session_id))
     )
     agent_session = result.scalar_one_or_none()
     if not agent_session:
         raise HTTPException(status_code=404, detail="会话不存在")
-    return {"status": "approved", "session_id": session_id}
+    if agent_session.user_id != current_user.id and current_user.role != "super":
+        raise HTTPException(status_code=403, detail="无权操作此会话")
 
+    if agent_session.status != "waiting_human":
+        raise HTTPException(status_code=400, detail="会话不在等待审批状态")
 
+    # 2. 使用 Command(resume=...) 恢复图执行
+    graph = await _get_graph()
+    thread_id = agent_session.langgraph_thread_id or session_id
 
+    # Command 会从上次 interrupt 处恢复执行
+    # resume 值将作为 interrupt() 的返回值传入节点
+    state = await graph.ainvoke(
+        Command(resume={"approved": True, "reviewer": str(current_user.id)}),
+        {"configurable": {"thread_id": thread_id}},
+    )
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    return {
+        "status": "resumed",
+        "session_id": session_id,
+        "answer": state.get("answer", ""),
+    }

@@ -314,7 +314,7 @@ class RAGEvaluator:
                 print("[eval] 调用 LLM 生成回答...")
                 t_gen = time.monotonic()
                 course_context = await build_course_context(session, course_id)
-                result.answer = await self.generator.generate(
+                result.answer, _ = await self.generator.generate(
                     question["question"], context, course_context
                 )
                 print(f"[eval] LLM 生成完成, 耗时={(time.monotonic()-t_gen)*1000:.0f}ms, answer_chars={len(result.answer)}")

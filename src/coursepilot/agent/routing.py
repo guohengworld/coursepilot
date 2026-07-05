@@ -10,19 +10,33 @@ def route_by_intent(state: dict) -> str:
     """classify 节点后根据 intent 路由
 
     Returns:
-        "get_mastery" — practice / review（需要掌握度）
+        "human_review" — practice / review（需要掌握度）
         "diagnose"    — diagnose
         "query_rag"   — question / code_help（默认 RAG 问答）
     """
-    intent = state.get("intent", "question")
-    routing = {
-        "practice": "get_mastery",
-        "review": "get_mastery",
-        "diagnose": "diagnose",
-        "code_help": "query_rag",
-        "question": "query_rag",
-    }
-    return routing.get(intent, "query_rag")
+    intent = state.get("intent", "")
+    if intent == "question":
+        return "query_rag"
+    elif intent == "practice":
+        return "human_review"  # 改为走 human_review 而非 get_mastery
+    elif intent == "review":
+        return "human_review"  # 改为走 human_review 而非 get_mastery
+    elif intent == "diagnose":
+        return "diagnose"
+    elif intent == "code_help":
+        return "query_rag"
+    return "query_rag"
+
+
+def route_after_review(state: dict) -> str:
+    """human_review 节点后的路由"""
+    if state.get("human_review_result") == "rejected":
+        return "finalize"
+    # 根据 intent 继续
+    intent = state.get("intent", "")
+    if intent in ("practice", "review"):
+        return "get_mastery"
+    return "finalize"
 
 def route_after_rag(state: dict) -> str:
     """query_rag 节点判断是否继续出题
