@@ -46,7 +46,8 @@
     "question": "什么是多元函数的全微分？请说明其定义和意义。",
     "answer": "对于二元函数 $z = f(x, y)$，若在点 $(x_0, y_0)$ 处的全增量 $\\Delta z$ 可表示为 $A \\cdot \\Delta x + B \\cdot \\Delta y + o(\rho)$，其中 $\rho = \\sqrt{(\\Delta x)^2 + (\\Delta y)^2}$，则称函数在该点可微，线性主部 $A \\cdot \\Delta x + B \\cdot \\Delta y$ 称为全微分。全微分描述了函数增量的线性近似，类似于一元函数中微分的作用。",
     "ground_truth_contexts": [
-      "59aeaa3f-10d5-482b-83cb-a1cfc27780d8"
+      "59aeaa3f-10d5-482b-83cb-a1cfc27780d8",
+      "54125180-afa8-4657-8ad8-3b47ad4ce339"
     ],
     "question_type": "concept",
     "kp_path": "微积分/第8章 多元函数的微分学/8.4 全微分及其应用",
@@ -94,7 +95,10 @@
     "question": "向量的数量积和向量积在结果和几何意义上有什么区别？",
     "answer": "向量的数量积结果是标量，等于两向量模长与夹角余弦的乘积，用于计算投影和夹角；而向量积结果是向量，等于两向量模长与夹角正弦的乘积，方向垂直于原平面，用于求法向量和面积。",
     "ground_truth_contexts": [
-      "37058055-267d-41a3-867b-4db31953e5e9"
+      "899a3b0f-abc0-451f-bbb1-c18afd7d1f42",
+      "ead1a28e-c92c-4a77-a8a7-57fa77516604",
+      "f9f531fb-d222-44a4-a64b-78eebfbfd406",
+      "42c1740c-c1d1-4773-8cf9-3f5b07ddd952"
     ],
     "question_type": "comparison",
     "kp_path": "微积分/第7章 向量代数与空间解析几何/7.3 向量的数量积和向量积",
