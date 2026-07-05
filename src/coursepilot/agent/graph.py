@@ -25,6 +25,7 @@ from coursepilot.agent.nodes import (
 )
 from coursepilot.agent.routing import (
     route_by_intent, route_after_rag, route_after_evaluate,
+    route_after_review,
 )
 from coursepilot.agent.state import AgentState
 from coursepilot.config import settings

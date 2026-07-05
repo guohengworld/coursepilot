@@ -108,7 +108,7 @@ class TestGraphStructure:
 
     @pytest.mark.asyncio
     async def test_graph_has_ten_nodes(self):
-        """build_agent_graph() 注册了 10 个自定义节点（Phase 1: 4 + Phase 2: 6）"""
+        """build_agent_graph() 注册了 11 个自定义节点（Phase 1: 4 + Phase 2: 6 + Phase 3: 1）"""
         from langgraph.checkpoint.memory import MemorySaver
 
         with patch("coursepilot.agent.graph._get_saver", return_value=MemorySaver()):
@@ -116,7 +116,8 @@ class TestGraphStructure:
             graph = await build_agent_graph()
 
         custom_nodes = {n for n in graph.nodes if not n.startswith("__")}
-        assert len(custom_nodes) == 10
+        assert len(custom_nodes) == 11
+        assert "human_review" in custom_nodes
 
     def test_graph_linear_edges_in_builder(self):
         """检查 builder 注册了正确的边"""
@@ -166,10 +167,11 @@ class TestGraphStructure:
         assert isinstance(saver, AsyncPostgresSaver)
 
     def test_route_by_intent_routes_properly(self):
-        """Phase 2 根据 inten 'query_rag'"""
+        """Phase 3 根据 intent 路由（practice/review → human_review）"""
         from coursepilot.agent.routing import route_by_intent
         assert route_by_intent({"intent": "question"}) == "query_rag"
-        assert route_by_intent({"intent": "practice"}) == "get_mastery"
+        assert route_by_intent({"intent": "practice"}) == "human_review"
+        assert route_by_intent({"intent": "review"}) == "human_review"
         assert route_by_intent({"intent": "unknown"}) == "query_rag"
         assert route_by_intent({}) == "query_rag"
 
@@ -817,17 +819,32 @@ class TestAgentAPI:
         response = client.get(f"/api/v1/agent/sessions/{uuid4()}")
         assert response.status_code == 404
 
-    def test_approve_endpoint(self, client, mock_db):
-        """审批端点返回 200 + approved"""
-        from coursepilot.models import AgentSession
+    def test_approve_endpoint(self, client, mock_db, mock_graph):
+        """审批端点返回 200 + resumed（Phase 3 RBAC + human-in-loop）"""
+        from coursepilot.models import AgentSession, User
+        from coursepilot.api.deps import get_current_user
+        from coursepilot.main import app
+
+        teacher_id = uuid4()
+        teacher = User(id=teacher_id, username="teacher", role="teacher")
+        app.dependency_overrides[get_current_user] = lambda: teacher
+
         agent_session = MagicMock(spec=AgentSession)
+        agent_session.status = "waiting_human"
+        agent_session.user_id = teacher_id
+        agent_session.langgraph_thread_id = None
+
         result = MagicMock()
         result.scalar_one_or_none.return_value = agent_session
         mock_db.execute = AsyncMock(return_value=result)
 
-        response = client.post(f"/api/v1/agent/sessions/{uuid4()}/approve")
+        import coursepilot.api.agent as agent_mod
+        agent_mod._graph_app = mock_graph
+
+        session_id = uuid4()
+        response = client.post(f"/api/v1/agent/sessions/{session_id}/approve")
         assert response.status_code == 200
-        assert response.json()["status"] == "approved"
+        assert response.json()["status"] == "resumed"
 
 
 # ═══════════════════════════════════════════════════════════════

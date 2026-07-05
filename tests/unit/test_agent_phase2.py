@@ -109,8 +109,8 @@ class TestRoutingPhase2:
 
     def test_route_by_intent_practice_and_review(self):
         from coursepilot.agent.routing import route_by_intent
-        assert route_by_intent({"intent": "practice"}) == "get_mastery"
-        assert route_by_intent({"intent": "review"}) == "get_mastery"
+        assert route_by_intent({"intent": "practice"}) == "human_review"
+        assert route_by_intent({"intent": "review"}) == "human_review"
 
     def test_route_by_intent_diagnose(self):
         from coursepilot.agent.routing import route_by_intent
@@ -913,6 +913,8 @@ class TestPhase2Graph:
             "get_mastery", "generate_quiz", "evaluate_quiz",
             "create_plan", "diagnose", "review_plan",
         }
+        # Phase 3 增加了 human_review 节点
+        expected.add("human_review")
         assert custom_nodes == expected, f"缺失节点: {expected - custom_nodes}"
 
     def test_conditional_edges_in_routing_module(self):
@@ -993,6 +995,7 @@ class TestPhase2E2E:
         builder.add_edge("build_context", "classify")
         builder.add_conditional_edges("classify", route_by_intent, {
             "query_rag": "query_rag", "get_mastery": "get_mastery", "diagnose": "diagnose",
+            "human_review": "get_mastery",  # Phase 3: bypass human_review_node in unit tests
         })
         builder.add_edge("get_mastery", "query_rag")
         builder.add_conditional_edges("query_rag", route_after_rag, {
@@ -1026,6 +1029,7 @@ class TestPhase2E2E:
             "answer": "",
             "sources": [],
             "token_count": 0,
+            "llm_calls": [],
             "error": None,
             "mastery": {},
             "quiz_data": {},

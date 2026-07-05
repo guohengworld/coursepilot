@@ -135,12 +135,12 @@ async def finalize_node(state: dict) -> dict:
                 completion_tokens=total_completion,
             )
 
-        # ── Step D: 更新会话状态 ──
-        await _update_session_intent(
-            session, state["session_id"],
-            state.get("intent", "question"),
-            human_review_result=state.get("human_review_result"),
-        )
+            # ── Step D: 更新会话状态 ──
+            await _update_session_intent(
+                session, state["session_id"],
+                state.get("intent", "question"),
+                human_review_result=state.get("human_review_result"),
+            )
 
         # ── Step E: 异步 audit 日志（独立 session，不阻塞） ──
         import asyncio
@@ -158,7 +158,10 @@ async def finalize_node(state: dict) -> dict:
             ))
 
         # ── Step F: Profile 更新（已有） ──
-        asyncio.create_task(update_profile(...))
+        asyncio.create_task(update_profile(
+            user_id=state["user_id"],
+            course_id=state["course_id"],
+        ))
 
         return {"token_count": total_tokens, "error": None}
     except Exception as e:
@@ -300,6 +303,8 @@ async def human_review_node(state: dict) -> dict:
             "query": state.get("query", "")[:200],
             "message": f"需要确认是否执行 {intent} 操作"
         })
+    else:
+        approval = {"approved": True}
 
     if not isinstance(approval, dict) or not approval.get("approved", False):
         # 人类拒绝 → 跳过后续节点，直接到 finalize
