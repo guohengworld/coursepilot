@@ -1,10 +1,11 @@
-"""写入问答记录 + 更新会话状态"""
+"""写入问答记录 + 更新会话状态 + Token 计数"""
 import logging
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from coursepilot.config import settings
 from coursepilot.models import AgentSession, QARecord
 
 logger = logging.getLogger(__name__)
@@ -19,10 +20,13 @@ async def update_qa_record(
     retrieved_units: list,
     citations: list,
     session_id: str,
+    token_count: int = 0,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
 ) -> int:
-    """持久化 QA 记录并更新会话 token 计数
+    """持久化 QA 记录并更新会话 token 计数和成本估算
 
-    :returns: 当前 token_count（Phase 1 返回 0，Phase 2 实现真实计数）。
+    :returns: token_count
     """
     # 1. 写入 QA 记录
     qa = QARecord(
@@ -36,17 +40,17 @@ async def update_qa_record(
     )
     session.add(qa)
 
-    # 2. 更新会话状态
+    # 2. 更新会话 token 计数和成本
     result = await session.execute(
         select(AgentSession).where(AgentSession.id == UUID(session_id))
     )
     agent_session = result.scalar_one_or_none()
     if agent_session:
         agent_session.status = "completed"
-        if kp_path:
-            agent_session.intent = "question"   # classify 产出更精确的 intent
+        agent_session.token_count = token_count
+        input_cost = (prompt_tokens / 1000) * settings.token_cost_per_1k_input
+        output_cost = (completion_tokens / 1000) * settings.token_cost_per_1k_output
+        agent_session.estimated_cost = input_cost + output_cost
 
     await session.flush()
-    return 0    # Phase 2：从 LLM response 提取真实 token 计数
-
-
+    return token_count

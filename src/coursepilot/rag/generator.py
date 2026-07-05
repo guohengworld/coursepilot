@@ -1,9 +1,8 @@
-"""
-LLM 生成器 —— DeepSeek 调用 + System Prompt 组装
+"""LLM 生成器 —— DeepSeek 调用 + System Prompt 组装
 
 用法：
     generator = Generator()
-    answer = await generator.generate(query, context, course_context)
+    answer, token_info = await generator.generate(query, context, course_context)
 """
 
 from __future__ import annotations
@@ -67,16 +66,16 @@ class Generator:
         course_context: dict,
         *,
         temperature: float | None = None,
-    ) -> str:
+    ) -> tuple[str, dict]:
         """生成回答
 
-        :param query: 学生原始问题
-        :param context: 格式化后的教材内容（XML source 标签）
-        :param course_context: {name, textbook, chapters} 或 None
-        :param temperature: LLM 温度，默认从 settings 读取
+        :returns: (answer, token_info)
+            token_info: {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}
         """
         if not self.api_key:
-            return "错误：LLM API Key 未配置，无法生成回答"
+            return "错误：LLM API Key 未配置，无法生成回答", {
+                "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+            }
 
         system = SYSTEM_PROMPT.format(
             course_context=_format_course(course_context),
@@ -97,7 +96,14 @@ class Generator:
             temperature=temperature if temperature is not None else settings.llm_temperature,
             # max_tokens=max_tokens
         )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        usage = response.usage
+        token_info = {
+            "prompt_tokens": usage.prompt_tokens if usage else 0,
+            "completion_tokens": usage.completion_tokens if usage else 0,
+            "total_tokens": usage.total_tokens if usage else 0,
+        }
+        return content, token_info
 
     async def generate_stream(
         self,

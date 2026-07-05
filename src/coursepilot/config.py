@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     diagnose_weak_threshold: float = 0.6   # 正确率低于此值视为薄弱
     diagnose_lookback_days: int = 90       # 分析最近 N 天的做题记录
 
+    # ── Token 计价（仅内部成本估算，非用户定价） ────────
+    token_cost_per_1k_input: float = 0.0005   # 每千输入 token 成本（元）
+    token_cost_per_1k_output: float = 0.0015  # 每千输出 token 成本（元）
+
     model_config = SettingsConfigDict(
         env_file=_PROJECT_ROOT / ".env",
         extra="ignore",

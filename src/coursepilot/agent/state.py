@@ -50,3 +50,8 @@ class AgentState(TypedDict):
     # 复习计划
     review_plan: dict           # review_plan 输出: {"items": [...], "total_count": N, "plan_id": "..."}
 
+    # Token 用量追踪
+    llm_calls: list[dict]       # [{node, prompt_tokens, completion_tokens, total_tokens}, ...]
+
+    # 人工审核结果
+    human_review_result: str | None  # None / "approved" / "rejected"
