@@ -5,7 +5,7 @@ finalize_node 末尾异步触发，聚合 PracticeRecord → 按 KP 算掌握度
 """
 import logging
 from uuid import UUID
-from sqlalchemy import select, func as sa_func
+from sqlalchemy import Integer, select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 from coursepilot.db import async_session_factory
 from coursepilot.models import PracticeRecord, Question, KnowledgePoint, UserProfile, QARecord
@@ -20,6 +20,7 @@ async def update_profile(
     try:
         async with async_session_factory() as session:
             await _do_update(session, user_id, course_id)
+            await session.commit()
     except Exception:
         logger.exception("update_profile 失败 (不影响主线程)")
 
@@ -36,7 +37,7 @@ async def _do_update(
             KnowledgePoint.kp_path,
             sa_func.count(PracticeRecord.id),
             sa_func.sum(
-                sa_func.cast(PracticeRecord.correct_flag, sa_func.Integer())
+                sa_func.cast(PracticeRecord.correct_flag, Integer)
             ),
         )
         .select_from(PracticeRecord)

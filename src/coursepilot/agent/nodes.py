@@ -142,6 +142,9 @@ async def finalize_node(state: dict) -> dict:
                 human_review_result=state.get("human_review_result"),
             )
 
+            # ── 提交事务 ──
+            await session.commit()
+
         # ── Step E: 异步 audit 日志（独立 session，不阻塞） ──
         import asyncio
         asyncio.create_task(log_agent_chat(
