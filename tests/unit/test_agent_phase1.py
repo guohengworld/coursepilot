@@ -43,7 +43,8 @@ def mock_db():
     execute() 用 async def 实现，确保 await session.execute(...) 返回预置的 result。
     result 链：scalar_one_or_none → None | scalars → result → all → []
     """
-    session = AsyncMock(spec=['execute', 'add', 'flush'])
+    session = AsyncMock(spec=['execute', 'add', 'flush', 'commit'])
+    session.commit = AsyncMock()
 
     result = MagicMock()
     result.scalar_one_or_none.return_value = None

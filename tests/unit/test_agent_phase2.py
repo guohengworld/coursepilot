@@ -35,7 +35,8 @@ ZERO_TOKENS = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 @pytest.fixture
 def mock_db():
     """异步 DB 会话 mock（同 Phase 1 模式）"""
-    session = AsyncMock(spec=['execute', 'add', 'flush', 'scalar'])
+    session = AsyncMock(spec=['execute', 'add', 'flush', 'scalar', 'commit'])
+    session.commit = AsyncMock()
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
     result.scalars.return_value = result
@@ -165,7 +166,7 @@ class TestRoutingPhase2:
 
     def test_route_after_evaluate_fail_at_limit_no_retry(self):
         from coursepilot.agent.routing import route_after_evaluate
-        state = {"intent": "practice", "eval_result": {"status": "FAIL"}, "retry_count": 2}
+        state = {"intent": "practice", "eval_result": {"status": "FAIL"}, "retry_count": 3}
         assert route_after_evaluate(state) == "create_plan"
 
     def test_route_after_evaluate_review_pass_goes_to_review_plan(self):
@@ -950,8 +951,8 @@ class TestPhase2Graph:
         assert route_after_evaluate({"intent": "review", "eval_result": {"status": "PASS"}, "retry_count": 0}) == "review_plan"
         # FAIL + retry < 2 → generate_quiz
         assert route_after_evaluate({"intent": "practice", "eval_result": {"status": "FAIL"}, "retry_count": 1}) == "generate_quiz"
-        # FAIL + retry >= 2 → create_plan（最多重试后仍展示题目）
-        assert route_after_evaluate({"intent": "practice", "eval_result": {"status": "FAIL"}, "retry_count": 2}) == "create_plan"
+        # FAIL + retry >= 3 → create_plan（最多重试后仍展示题目）
+        assert route_after_evaluate({"intent": "practice", "eval_result": {"status": "FAIL"}, "retry_count": 3}) == "create_plan"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1184,11 +1185,12 @@ class TestPhase2E2E:
 
     @pytest.mark.asyncio
     async def test_evaluate_retry_loop(self, mock_asf):
-        """evaluate FAIL → 重试 generate_quiz（最多 1 次重试，即共 2 次 evaluate）
+        """evaluate FAIL → 重试 generate_quiz（最多 2 次重试，即共 3 次 evaluate）
 
         evaluate_quiz_node 在 FAIL 时递增 retry_count：
-        第 1 次 FAIL → retry=1 → route_after_evaluate: retry<2 → "generate_quiz"
-        第 2 次 FAIL → retry=2 → route_after_evaluate: retry>=2 → "finalize"
+        第 1 次 FAIL → retry=1 → route_after_evaluate: retry<3 → "generate_quiz"
+        第 2 次 FAIL → retry=2 → route_after_evaluate: retry<3 → "generate_quiz"
+        第 3 次 FAIL → retry=3 → route_after_evaluate: retry>=3 → "create_plan"
         """
         graph = self._build_graph()
         state = self._make_state(query="出几道题")
@@ -1217,7 +1219,7 @@ class TestPhase2E2E:
 
             result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid4())}})
 
-        assert evaluate_call_count[0] == 2, f"evaluate 应被调用 2 次，实际 {evaluate_call_count[0]}"
+        assert evaluate_call_count[0] == 3, f"evaluate 应被调用 3 次，实际 {evaluate_call_count[0]}"
         assert result["error"] is None
 
 
