@@ -60,7 +60,7 @@ def route_after_evaluate(state: dict) -> str:
     eval_result = state.get("eval_result", {})
     retry_count = state.get("retry_count", 0)
 
-    if eval_result.get("status") == "FAIL" and retry_count < 2:
+    if eval_result.get("status") == "FAIL" and retry_count < 3:
         return "generate_quiz"  # 回 generate_quiz 重试
 
     if state.get("intent") == "review":
