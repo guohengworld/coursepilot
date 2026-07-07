@@ -79,6 +79,7 @@ dependencies = [
     "loguru>=0.7,<1",
     "rich>=13.0,<15",
     "streamlit>=1.40,<2",
+    "mcp>=1,<2",
 ]
 
 [dependency-groups]
