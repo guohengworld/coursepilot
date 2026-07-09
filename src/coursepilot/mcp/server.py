@@ -24,7 +24,6 @@ Resources（由 LLM 读取的结构化数据）：
   # SSE 模式（用于远程 MCP Client，如 Cline）
   PYTHONPATH=src uv run python -m coursepilot.mcp.server --sse --port 8080
 """
-from __future__ import annotations
 
 import json
 import logging
@@ -52,7 +51,7 @@ _LOGGER = logging.getLogger(__name__)
 # 服务器名称和描述会暴露给 MCP Client，方便 LLM 理解这个 Server 的用途
 mcp = FastMCP(
     "CoursePilot",
-    description="AI 教学助手：基于教材的 RAG 问答、学情诊断、练习题生成、知识点树查询",
+    instructions="AI 教学助手：基于教材的 RAG 问答、学情诊断、练习题生成、知识点树查询",
 )
 
 # 内部工具函数
@@ -281,11 +280,6 @@ async def generate_practice(
         query = kp_path or course_context.get("name", "全部内容")
         context, metadata = await retriever.retrieve(session, query, course_id)
 
-        # 根据 kp_path 或全课程检索教材内容
-        retriever = Retriever()
-        query = kp_path or course_context.get("name", "全部内容")
-        context, metadata = await retriever.retrieve(session, query, course_id)
-
         # 调用 generate_quiz skill
         # mastery 传空字典，表示不针对薄弱点（外部工具无此上下文）
         quiz_data, token_info = await gen_quiz(context, course_context, {})
@@ -436,9 +430,11 @@ def main():
     )
 
     if args.sse:
-        # SSE 模式：通过 HTTP 提供 MCP 服务
-        # MCP Client 通过 HTTP POST 发送请求
-        mcp.run(transport="sse", host=args.host, port=args.port)
+        # SSE 模式：host/port 需在 FastMCP 构造函数中设置，
+        # 这里直接覆盖 settings
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        mcp.run(transport="sse")
     else:
         # stdio 模式：通过标准输入输出通信
         # 此为 Claude Desktop / VS Code 的标准嵌入方式
