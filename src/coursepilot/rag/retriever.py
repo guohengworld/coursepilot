@@ -255,7 +255,8 @@ async def _kp_expand(
 
     # 两阶段过滤：语义粗排(BGE-M3 dense) → 精排(cross-encoder)
     N_COARSE = 30  # 粗排保留数，≤30 直接精排
-    if query and reranker is not None and len(all_units) > N_COARSE:
+    reranker_ok = reranker is not None and reranker.available
+    if query and reranker_ok and len(all_units) > N_COARSE:
         import time as _time
         print(f"[kp_expand] 两阶段过滤: 全量={len(all_units)} → 粗排top-{N_COARSE} → 精排")
         if encoder is not None and query_dense is not None:
@@ -270,7 +271,7 @@ async def _kp_expand(
             print(f"[kp_expand] 精排完成, 耗时={(_time.monotonic()-t1)*1000:.0f}ms")
         except Exception:
             all_units = coarse
-    elif query and reranker is not None and len(all_units) > 10:
+    elif query and reranker_ok and len(all_units) > 10:
         print(f"[kp_expand] 全量精排, unit数={len(all_units)}")
         try:
             all_units = reranker.rerank(

@@ -15,27 +15,35 @@ from coursepilot.rag.config import config
 
 logger = logging.getLogger(__name__)
 
-_reranker_instance = None
-
-
 def _load_reranker():
-    """惰性加载 bge-reranker-v2-m3（~1.5 GB，CPU 推理）"""
-    from FlagEmbedding import FlagReranker
-    logger.info("加载 bge-reranker-v2-m3: %s", settings.reranker_model_path)
-    return FlagReranker(
-        settings.reranker_model_path,
-        use_fp16=False,
-        device="cpu",
-    )
+    """加载 bge-reranker-v2-m3（~1.5 GB，CPU 推理）"""
+    try:
+        from FlagEmbedding import FlagReranker
+        logger.info("加载 bge-reranker-v2-m3: %s", settings.reranker_model_path)
+        return FlagReranker(
+            settings.reranker_model_path,
+            use_fp16=False,
+            device="cpu",
+        )
+    except OSError as e:
+        logger.warning("reranker 加载失败 (OSError: %s)，将跳过重排序步骤", e)
+        return None
+
 
 class Reranker:
-    """Cross-encoder 重排序器，全局单例（惰性加载）"""
+    """Cross-encoder 重排序器（单例）"""
 
-    def __init__(self):
-        global _reranker_instance
-        if _reranker_instance is None:
-            _reranker_instance = _load_reranker()
-        self.model = _reranker_instance
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance.model = _load_reranker()
+        return cls._instance
+
+    @property
+    def available(self) -> bool:
+        return self.model is not None
 
     def rerank(
         self,
@@ -54,6 +62,11 @@ class Reranker:
         top_k = top_k or config.rerank_top_k
         if not candidates:
             return []
+        if self.model is None:
+            logger.warning("reranker 不可用，跳过重排序，直接返回前 %d 个候选", top_k)
+            for i, c in enumerate(candidates[:top_k]):
+                c["rerank_score"] = 1.0 - i * 0.01
+            return candidates[:top_k]
 
         print(f"[reranker] 开始重排序, 候选数={len(candidates)}, top_k={top_k}")
         t0 = __import__("time").monotonic()
