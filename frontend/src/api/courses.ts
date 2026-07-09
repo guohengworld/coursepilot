@@ -51,8 +51,12 @@ export async function uploadDocument(
   }
 }
 
-export function getKnowledgePoints(courseId: string) {
-  return request<KnowledgePoint[]>('GET', `/courses/${courseId}/knowledge-points`)
+export function getKnowledgePoints(courseId: string, documentId?: string) {
+  let path = `/courses/${courseId}/knowledge-points`
+  if (documentId) {
+    path += `?document_id=${documentId}`
+  }
+  return request<KnowledgePoint[]>('GET', path)
 }
 
 export function askQuestion(courseId: string, data: AskRequest) {

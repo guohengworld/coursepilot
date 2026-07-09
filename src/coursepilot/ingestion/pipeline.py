@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -29,10 +28,12 @@ async def _ensure_kp_tree(
     session: AsyncSession,
     course_id: UUID,
     content_list: list[dict],
+    document_id: str | None = None,
 ) -> list[dict]:
     """从 content_list 提取标题，自动构建/合并知识点树。
 
-    幂等：已存在的 kp_path 不重复创建，支持多卷教材逐本上传。
+    幂等：已存在的 kp_path 不重复创建，支持多文档逐本上传。
+    当传入 document_id 时，KP 树按文档隔离——每份文档拥有独立的 KP 子树。
     返回: KP 节点列表 [{id, title, kp_path, level}, ...]，供 KPSplitter 使用。
     """
     from coursepilot.knowledge.syllabus_parser import extract_headings, headings_to_syllabus
@@ -46,13 +47,24 @@ async def _ensure_kp_tree(
     course_name = course.name if course else "未命名课程"
 
     nodes = headings_to_syllabus(headings, course_name)
-    logger.info("B0: 从 %d 个标题构建 %d 个 KP 节点（课程: %s）", len(headings), len(nodes), course_name)
-
-    # 查询已有 KP，按 kp_path 去重
-    existing_result = await session.execute(
-        select(KnowledgePoint.kp_path)
-        .where(KnowledgePoint.course_id == course_id)
+    logger.info(
+        "B0: 从 %d 个标题构建 %d 个 KP 节点（课程: %s, document: %s）",
+        len(headings),
+        len(nodes),
+        course_name,
+        document_id,
     )
+
+    # 按 (course_id, document_id) 确定已有 KPs —— per-document 隔离
+    existing_query = select(KnowledgePoint.kp_path).where(
+        KnowledgePoint.course_id == course_id,
+    )
+    if document_id is not None:
+        doc_uuid = UUID(document_id)
+        existing_query = existing_query.where(KnowledgePoint.document_id == doc_uuid)
+    else:
+        existing_query = existing_query.where(KnowledgePoint.document_id.is_(None))
+    existing_result = await session.execute(existing_query)
     existing_paths = {row[0] for row in existing_result.fetchall()}
 
     new_nodes = [n for n in nodes if n["kp_path"] not in existing_paths]
@@ -63,6 +75,7 @@ async def _ensure_kp_tree(
         for node in new_nodes:
             kp = KnowledgePoint(
                 course_id=course_id,
+                document_id=UUID(document_id) if document_id else None,
                 kp_path=node["kp_path"],
                 title=node["title"],
                 summary=node.get("summary", ""),
@@ -75,7 +88,7 @@ async def _ensure_kp_tree(
             title_to_id[node["title"]] = str(kp.id)
             node["id"] = str(kp.id)
 
-        # 回填 parent_id
+        # 回填 parent_id（限同一文档内的 KPs）
         for node in new_nodes:
             if node.get("parent_title") and node["parent_title"] in title_to_id:
                 kp = await session.get(KnowledgePoint, UUID(title_to_id[node["title"]]))
@@ -84,12 +97,19 @@ async def _ensure_kp_tree(
         await session.flush()
         logger.info("B0: 新增 %d 个 KP 节点（已存在 %d 个）", len(new_nodes), len(existing_paths))
 
-    # 返回完整 KP 列表（已有 + 新增）
-    all_kp_result = await session.execute(
+    # 返回当前文档范围下的完整 KP 列表
+    all_kp_query = (
         select(KnowledgePoint)
-        .where(KnowledgePoint.course_id == course_id)
+        .where(
+            KnowledgePoint.course_id == course_id,
+        )
         .order_by(KnowledgePoint.sort_order)
     )
+    if document_id is not None:
+        all_kp_query = all_kp_query.where(KnowledgePoint.document_id == UUID(document_id))
+    else:
+        all_kp_query = all_kp_query.where(KnowledgePoint.document_id.is_(None))
+    all_kp_result = await session.execute(all_kp_query)
     return [
         {
             "id": str(kp.id),
@@ -157,7 +177,12 @@ async def run_ingestion(
             raise ValueError("解析结果为空")
 
         # ── B1: 自动构建/合并知识点树（新增） ──────────
-        kp_nodes = await _ensure_kp_tree(session, doc.course_id, content_list)
+        kp_nodes = await _ensure_kp_tree(
+            session,
+            doc.course_id,
+            content_list,
+            document_id=str(doc.id),
+        )
 
         # ── B2: 切分为 KnowledgeUnit（阶段 A 改造） ──────
         #   A1: _split_by_headings 追踪 heading 写入 meta_data
@@ -242,29 +267,26 @@ async def _encode_units(units: list[dict], course_id: str) -> None:
         u["_unit_id"] = str(uuid4())
 
     # 批量编码：summary + content 混合，兼顾语义概括与细节
-    texts = [
-        (u.get("summary") or "") + "\n" + u["content"]
-        for u in units
-    ]
+    texts = [(u.get("summary") or "") + "\n" + u["content"] for u in units]
     vecs = encoder.encode(texts)
 
     # 构建 Milvus 插入数据
     payloads = []
     for u, vec in zip(units, vecs):
-        payloads.append({
-            "uuid": u["_unit_id"],
-            "dense_vec": vec["dense"],
-            "sparse_vec": vec["sparse"],
-            "kp_id": u.get("kp_id", ""),
-            "course_id": course_id,
-            "kp_path": u.get("kp_path", ""),
-            "content": u["content"][:8192],
-        })
+        payloads.append(
+            {
+                "uuid": u["_unit_id"],
+                "dense_vec": vec["dense"],
+                "sparse_vec": vec["sparse"],
+                "kp_id": u.get("kp_id", ""),
+                "course_id": course_id,
+                "kp_path": u.get("kp_path", ""),
+                "content": u["content"][:8192],
+            }
+        )
 
     store.insert(payloads)
     logger.info("B7 encode_units: %d units encoded + inserted to Milvus", len(units))
-
-
 
 
 def _kp_level(kp_path: str) -> int:

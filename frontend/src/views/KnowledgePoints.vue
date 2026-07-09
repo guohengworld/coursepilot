@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { getCourses, getKnowledgePoints } from '@/api/courses'
-import type { Course, KnowledgePoint } from '@/types'
+import { getCourses, getDocuments, getKnowledgePoints } from '@/api/courses'
+import type { Course, Document, KnowledgePoint } from '@/types'
 
 const route = useRoute()
 
 const courses = ref<Course[]>([])
+const documents = ref<Document[]>([])
 const selectedCourseId = ref(route.query.courseId as string || '')
+const selectedDocumentId = ref('')
 const flatNodes = ref<KnowledgePoint[]>([])
 const loading = ref(false)
 
@@ -46,10 +48,24 @@ async function loadCourses() {
   }
 }
 
+async function loadDocuments() {
+  if (!selectedCourseId.value) {
+    documents.value = []
+    return
+  }
+  const res = await getDocuments(selectedCourseId.value)
+  if (res.ok && Array.isArray(res.data)) {
+    documents.value = res.data as Document[]
+  }
+}
+
 async function loadKnowledgePoints() {
   if (!selectedCourseId.value) return
   loading.value = true
-  const res = await getKnowledgePoints(selectedCourseId.value)
+  const res = await getKnowledgePoints(
+    selectedCourseId.value,
+    selectedDocumentId.value || undefined,
+  )
   if (res.ok && Array.isArray(res.data)) {
     flatNodes.value = res.data as KnowledgePoint[]
   }
@@ -58,6 +74,16 @@ async function loadKnowledgePoints() {
 
 function handleCourseChange(val: string) {
   selectedCourseId.value = val
+  selectedDocumentId.value = ''
+  documents.value = []
+  flatNodes.value = []
+  if (val) {
+    loadDocuments()
+  }
+  loadKnowledgePoints()
+}
+
+function handleDocumentChange() {
   flatNodes.value = []
   loadKnowledgePoints()
 }
@@ -65,6 +91,7 @@ function handleCourseChange(val: string) {
 onMounted(() => {
   loadCourses()
   if (selectedCourseId.value) {
+    loadDocuments()
     loadKnowledgePoints()
   }
 })
@@ -76,11 +103,11 @@ onMounted(() => {
       <h2>知识点树</h2>
     </div>
 
-    <div class="mb-16">
+    <div class="filters mb-16">
       <el-select
         v-model="selectedCourseId"
         placeholder="请选择课程"
-        style="width: 320px"
+        style="width: 280px"
         @change="handleCourseChange"
       >
         <el-option
@@ -88,6 +115,21 @@ onMounted(() => {
           :key="c.id"
           :label="c.name"
           :value="c.id"
+        />
+      </el-select>
+
+      <el-select
+        v-model="selectedDocumentId"
+        placeholder="全部教材"
+        style="width: 280px"
+        clearable
+        @change="handleDocumentChange"
+      >
+        <el-option
+          v-for="d in documents"
+          :key="d.id"
+          :label="d.filename"
+          :value="d.id"
         />
       </el-select>
     </div>
@@ -122,6 +164,34 @@ onMounted(() => {
     </el-card>
   </div>
 </template>
+
+<style scoped>
+.filters {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.tree-label {
+  font-weight: 500;
+}
+
+.tree-path {
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+.tree-difficulty {
+  flex-shrink: 0;
+}
+</style>
 
 <style scoped>
 .tree-node {

@@ -1,26 +1,29 @@
 """课程管理 API"""
-from uuid import UUID
+
 import time
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.api.deps import get_current_user, require_superuser
 from coursepilot.db import get_session
-from coursepilot.models import User, Course, Document, KnowledgePoint, KnowledgeUnit
-from coursepilot.storage import file_store
-from coursepilot.storage.file_store import FileStore
+from coursepilot.models import Course, Document, KnowledgePoint, KnowledgeUnit, User
 from coursepilot.rag.vector_store import VectorStore
+from coursepilot.storage.file_store import FileStore
 
 router = APIRouter(prefix="/courses", tags=["courses"])
 
 file_store = FileStore()
 
+
 # Schema
 class CourseCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     description: str | None = None
+
 
 class CourseOut(BaseModel):
     id: str
@@ -28,6 +31,7 @@ class CourseOut(BaseModel):
     description: str | None
     created_by: str
     created_at: str
+
 
 class DocumentOut(BaseModel):
     id: str
@@ -38,11 +42,13 @@ class DocumentOut(BaseModel):
     page_count: int | None
     uploaded_at: str
 
+
 class KPTreeNodeOut(BaseModel):
     id: str
     title: str
     kp_path: str
     children: list["KPTreeNodeOut"] = []
+
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
@@ -59,11 +65,12 @@ class AskResponse(BaseModel):
 
 # 课程 CRUD
 
+
 @router.get("")
 # 依赖注入：获取数据库异步会话、获取当前登录用户（下划线开头表示该变量仅作权限拦截，函数内不使用）
 async def list_courses(
-        session: AsyncSession = Depends(get_session),
-        _user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(get_current_user),
 ) -> list[CourseOut]:
     """获取课程列表"""
     result = await session.execute(select(Course).order_by(Course.created_at.desc()))
@@ -82,9 +89,9 @@ async def list_courses(
 @router.post("", status_code=201)
 # 依赖注入：获取请求体、数据库会话、校验当前用户必须是超级用户
 async def create_course(
-        body: CourseCreate,
-        session: AsyncSession = Depends(get_session),
-        user: User = Depends(require_superuser),
+    body: CourseCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_superuser),
 ) -> CourseOut:
     """创建课程"""
     course = Course(
@@ -104,11 +111,12 @@ async def create_course(
         created_at=course.created_at.isoformat(),
     )
 
+
 @router.get("/{course_id}")
 async def get_course(
-        course_id: UUID,
-        session: AsyncSession = Depends(get_session),
-        _user: User = Depends(get_current_user),
+    course_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(get_current_user),
 ):
     """获取课程详情"""
     course = await _get_course_or_404(session, course_id)
@@ -121,12 +129,11 @@ async def get_course(
     )
 
 
-
 @router.delete("/{course_id}")
 async def delete_course(
-        course_id: UUID,
-        session: AsyncSession = Depends(get_session),
-        user: User = Depends(require_superuser),
+    course_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_superuser),
 ) -> dict:
     """删除课程（级联删除所有相关数据 + 文件）"""
     course = await _get_course_or_404(session, course_id)
@@ -141,13 +148,14 @@ async def delete_course(
 
 # ========== 文件上传与资料管理 ===========
 
+
 # 状态码202：请求已接受，但未立即完成。
 @router.post("/upload", status_code=202)
 async def upload_file(
-        file: UploadFile = File(...),
-        course_id: UUID = Form(...),
-        session: AsyncSession = Depends(get_session),
-        user: User = Depends(require_superuser),
+    file: UploadFile = File(...),
+    course_id: UUID = Form(...),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_superuser),
 ) -> dict:
     """上传课程资料并触发 ingestion
 
@@ -160,7 +168,7 @@ async def upload_file(
     if ext not in ["pdf", "docx", "md"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"不支持的文件格式: .{ext}，仅支持 pdf/docx/md"
+            detail=f"不支持的文件格式: .{ext}，仅支持 pdf/docx/md",
         )
 
     # 2. 校验课程存在
@@ -178,7 +186,7 @@ async def upload_file(
         file_size=file_info["file_size"],
         file_path=file_info["file_path"],
         uploader_id=user.id,
-        status="pending"
+        status="pending",
     )
     session.add(doc)
     await session.flush()
@@ -188,6 +196,7 @@ async def upload_file(
     #    注意：MVP 阶段先同步执行（简单可靠），后续可改为 BackgroundTasks
     try:
         from coursepilot.ingestion.pipeline import run_ingestion
+
         await run_ingestion(session, str(doc.id))
     except Exception as exc:
         doc.status = "failed"
@@ -201,34 +210,38 @@ async def upload_file(
         "filename": filename,
     }
 
+
 @router.get("/{course_id}/documents")
 async def list_documents(
-        course_id: UUID,
-        session: AsyncSession = Depends(get_session),
-        _user: User = Depends(get_current_user),
+    course_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(get_current_user),
 ) -> list[DocumentOut]:
     """获取某课程下的资料列表"""
     await _get_course_or_404(session, course_id)
     result = await session.execute(
-        select(Document)
-        .where(Document.course_id == course_id)
-        .order_by(Document.created_at.desc())
+        select(Document).where(Document.course_id == course_id).order_by(Document.created_at.desc())
     )
     return [
         DocumentOut(
-            id=str(d.id), filename=d.filename, file_type=d.file_type,
-            file_size=d.file_size, status=d.status, page_count=d.page_count,
+            id=str(d.id),
+            filename=d.filename,
+            file_type=d.file_type,
+            file_size=d.file_size,
+            status=d.status,
+            page_count=d.page_count,
             uploaded_at=d.created_at.isoformat(),
         )
         for d in result.scalars()
     ]
 
+
 @router.delete("/{course_id}/document/{document_id}")
 async def delete_document(
-        course_id: UUID,
-        document_id: UUID,
-        session: AsyncSession = Depends(get_session),
-        user: User = Depends(require_superuser)
+    course_id: UUID,
+    document_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_superuser),
 ) -> dict:
     """删除某份资料（同时删文件 + DB 知识单元 + Milvus 向量）"""
     result = await session.execute(
@@ -260,25 +273,35 @@ async def delete_document(
     await session.flush()
     return {"deleted": True, "knowledge_units_deleted": len(ku_ids)}
 
+
 # ========== 知识点树查询 ==========
+
 
 @router.get("/{course_id}/knowledge-points")
 async def get_knowledge_points(
-        course_id: UUID,
-        session: AsyncSession = Depends(get_session),
-        _user: User = Depends(get_current_user),
+    course_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    _user: User = Depends(get_current_user),
+    document_id: UUID | None = None,
 ) -> list[dict]:
-    """获取课程的知识点树（扁平列表，含 parent_id 便于前端渲染）"""
-    result = await session.execute(
+    """获取课程的知识点树（扁平列表，含 parent_id 便于前端渲染）
+
+    可选参数 document_id：传入则只返回该文档的 KPs；不传则返回全部（兼容原有行为）。
+    """
+    query = (
         select(KnowledgePoint)
         .where(KnowledgePoint.course_id == course_id)
         .order_by(KnowledgePoint.sort_order)
     )
+    if document_id is not None:
+        query = query.where(KnowledgePoint.document_id == document_id)
+    result = await session.execute(query)
     kps = result.scalars().all()
     return [
         {
             "id": str(kp.id),
             "parent_id": str(kp.parent_id) if kp.parent_id else None,
+            "document_id": str(kp.document_id) if kp.document_id else None,
             "kp_path": kp.kp_path,
             "title": kp.title,
             "summary": kp.summary,
@@ -296,7 +319,9 @@ async def _get_course_or_404(session, course_id):
         raise HTTPException(status_code=404, detail="课程不存在")
     return course
 
+
 # ========== RAG 问答 ==========
+
 
 @router.post("/{course_id}/ask")
 async def ask_course(
@@ -306,10 +331,10 @@ async def ask_course(
     user: User = Depends(get_current_user),
 ) -> AskResponse:
     """RAG 问答：检索教材内容 → LLM 生成回答"""
-    from coursepilot.rag.retriever import Retriever
-    from coursepilot.rag.generator import Generator, build_course_context
     from coursepilot.rag.citation import extract_citations
+    from coursepilot.rag.generator import Generator, build_course_context
     from coursepilot.rag.logger import QueryLogger
+    from coursepilot.rag.retriever import Retriever
 
     await _get_course_or_404(session, course_id)
 
@@ -320,9 +345,7 @@ async def ask_course(
     # 阶段 1-4：检索
     t0 = time.time()
     retriever = Retriever()
-    context, metadata = await retriever.retrieve(
-        session, body.question, str(course_id)
-    )
+    context, metadata = await retriever.retrieve(session, body.question, str(course_id))
     stages["retrieve_ms"] = round((time.time() - t0) * 1000, 1)
 
     # 课程上下文
@@ -360,6 +383,7 @@ async def ask_course(
         source_kp_paths=metadata["source_kp_paths"],
     )
 
+
 @router.post("/{course_id}/ask/stream")
 async def ask_course_stream(
     course_id: UUID,
@@ -368,24 +392,21 @@ async def ask_course_stream(
     user: User = Depends(get_current_user),
 ):
     """RAG 问答（SSE 流式输出）"""
-    from coursepilot.rag.retriever import Retriever
-    from coursepilot.rag.generator import Generator, build_course_context
     from fastapi.responses import StreamingResponse
+
+    from coursepilot.rag.generator import Generator, build_course_context
+    from coursepilot.rag.retriever import Retriever
 
     await _get_course_or_404(session, course_id)
 
     retriever = Retriever()
-    context, _metadata = await retriever.retrieve(
-        session, body.question, str(course_id)
-    )
+    context, _metadata = await retriever.retrieve(session, body.question, str(course_id))
 
     course_context = await build_course_context(session, course_id)
     generator = Generator()
 
     async def event_stream():
-        async for token in generator.generate_stream(
-            body.question, context, course_context
-        ):
+        async for token in generator.generate_stream(body.question, context, course_context):
             yield f"data: {token}\n\n"
         yield "data: [DONE]\n\n"
 
@@ -397,4 +418,3 @@ async def ask_course_stream(
             "Connection": "keep-alive",
         },
     )
-

@@ -55,6 +55,7 @@ export interface Document {
 export interface KnowledgePoint {
   id: string
   parent_id: string | null
+  document_id: string | null
   kp_path: string
   title: string
   summary: string | null
