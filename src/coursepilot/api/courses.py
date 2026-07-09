@@ -8,9 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.api.deps import get_current_user, require_superuser
 from coursepilot.db import get_session
-from coursepilot.models import User, Course, Document, KnowledgePoint
+from coursepilot.models import User, Course, Document, KnowledgePoint, KnowledgeUnit
 from coursepilot.storage import file_store
 from coursepilot.storage.file_store import FileStore
+from coursepilot.rag.vector_store import VectorStore
 
 router = APIRouter(prefix="/courses", tags=["courses"])
 
@@ -229,7 +230,7 @@ async def delete_document(
         session: AsyncSession = Depends(get_session),
         user: User = Depends(require_superuser)
 ) -> dict:
-    """删除某份资料（同时删文件 + DB 记录）"""
+    """删除某份资料（同时删文件 + DB 知识单元 + Milvus 向量）"""
     result = await session.execute(
         select(Document).where(
             Document.id == document_id,
@@ -240,10 +241,24 @@ async def delete_document(
     if not doc:
         raise HTTPException(status_code=404, detail="资料不存在")
 
+    # 删除关联的知识单元和 Milvus 向量
+    ku_result = await session.execute(
+        select(KnowledgeUnit.id).where(KnowledgeUnit.document_id == document_id)
+    )
+    ku_ids = [row[0] for row in ku_result.fetchall()]
+    if ku_ids:
+        # 从 Milvus 删除向量
+        vector_store = VectorStore()
+        vector_store.delete_by_uuids([str(uid) for uid in ku_ids])
+        # 从 DB 删除知识单元
+        await session.execute(
+            KnowledgeUnit.__table__.delete().where(KnowledgeUnit.document_id == document_id)
+        )
+
     file_store.delete(doc.file_path)
     await session.delete(doc)
     await session.flush()
-    return {"deleted": True}
+    return {"deleted": True, "knowledge_units_deleted": len(ku_ids)}
 
 # ========== 知识点树查询 ==========
 
