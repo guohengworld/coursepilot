@@ -221,7 +221,7 @@ async def run_ingestion(
             u["kp_path"] = kp_map.get(u.get("kp_id", ""), "")
 
         # ── B5: encode + Milvus insert（阶段 B 实施） ────
-        await _encode_units(units, str(doc.course_id))
+        await _encode_units(units, str(doc.course_id), str(doc.id))
 
         # ── B6: 批量插入 knowledge_units ─────────────────
         for u in units:
@@ -250,7 +250,7 @@ async def run_ingestion(
         raise
 
 
-async def _encode_units(units: list[dict], course_id: str) -> None:
+async def _encode_units(units: list[dict], course_id: str, document_id: str = "") -> None:
     """B7: BGE-M3 编码 + Milvus insert"""
     if not units:
         return
@@ -276,6 +276,7 @@ async def _encode_units(units: list[dict], course_id: str) -> None:
         payloads.append(
             {
                 "uuid": u["_unit_id"],
+                "document_id": document_id,
                 "dense_vec": vec["dense"],
                 "sparse_vec": vec["sparse"],
                 "kp_id": u.get("kp_id", ""),

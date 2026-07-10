@@ -17,6 +17,12 @@ GARBAGE_PATTERNS: list[str] = [
     r"^图书在版编目",  # CIP 数据（中文）
     r"^内容简介|^本书.*编写",  # 出版信息
     r"^封面|^扉页|^版权",  # 页面类型标记
+    # 页眉页脚噪声（页码、书名重复、章名重复）
+    r"^\d{1,3}\s*$",  # 纯页码行
+    r"^[-—]+\s*\d+\s*[-—]+$",  # "-- 123 --" 样式页码
+    r"^习题\s*$",  # 单独的 "习题" 标题（不含编号，容易被误判）
+    # 纯分隔线
+    r"^[-—=_*]{3,}$",
 ]
 
 GARBAGE_PAGE_RANGE: tuple[int, int] = (0, 2)  # 前 3 页（封面+目录）整体跳过
@@ -74,6 +80,7 @@ def _split_by_headings(content_list: list[dict]) -> list[dict]:
     current_heading: str = "未知章节"
     current_text_level: int = 99
     current_pages: set[int] = set()
+    block_has_body: bool = False       # 追踪当前 block 是否包含正文
 
     for item in content_list:
         text = item.get("text", "").strip()
@@ -85,22 +92,27 @@ def _split_by_headings(content_list: list[dict]) -> list[dict]:
 
         # text_level ≤ 4 触发新 block
         if level <= 4 and current:
+            # 纯标题 block 保留 heading 的 text_level，让下游 KPSplitter 能更新上下文
+            final_level = current_text_level if not block_has_body else 99
             blocks.append(
                 {
                     "text": "\n".join(current),
                     "page_ref": _format_page_ref(sorted(current_pages)),
                     "meta_data": {
-                        "text_level": current_text_level,
+                        "text_level": final_level,
                         "heading": current_heading,
                     },
                 }
             )
             current = []
             current_pages = set()
+            block_has_body = False
 
         # 更新当前标题
         if level <= 4:
             current_heading = text
+        else:
+            block_has_body = True
 
         current.append(text)
         current_text_level = level
@@ -108,12 +120,13 @@ def _split_by_headings(content_list: list[dict]) -> list[dict]:
 
     # 最后一个 block
     if current:
+        final_level = current_text_level if not block_has_body else 99
         blocks.append(
             {
                 "text": "\n".join(current),
                 "page_ref": _format_page_ref(sorted(current_pages)),
                 "meta_data": {
-                    "text_level": current_text_level,
+                    "text_level": final_level,
                     "heading": current_heading,
                 },
             }

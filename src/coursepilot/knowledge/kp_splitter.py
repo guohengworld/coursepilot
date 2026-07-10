@@ -69,8 +69,19 @@ class KPSplitter:
                 block["kp_path"] = self._lookup_path(kp_id)
                 continue
 
-            # 正文行：当前标题匹配 > 内容关键词匹配 > 根 KP 兜底
-            kp_id = self._match_by_heading(current_heading) if current_heading else None
+            # 正文行：meta_data.heading > 内部 current_heading > 内容关键词 > 根 KP 兜底
+            # meta_data.heading 由 _split_by_headings 写入，
+            # 保证即使没有 text_level ≤ 4 的 heading block，也能获得正确上下文
+            effective_heading = (
+                block.get("meta_data", {}).get("heading")
+                or current_heading
+            )
+
+            # 继承 heading 上下文到后续 block
+            if not current_heading and effective_heading:
+                current_heading = effective_heading
+
+            kp_id = self._match_by_heading(effective_heading) if effective_heading else None
             if not kp_id:
                 kp_id = self._match_by_content(text)
             if not kp_id and self._root:
@@ -101,10 +112,10 @@ class KPSplitter:
         return None
 
     def _match_by_content(self, text: str) -> str | None:
-        """正文关键词匹配：KP title 至少 3 字且在正文中出现。"""
+        """正文关键词匹配：KP title 在正文中完整出现（至少 2 字避免单字误匹配）。"""
         for kp in self.kp_nodes:
             t = kp.get("title", "")
-            if t and len(t) >= 3 and t in text:
+            if t and len(t) >= 2 and t in text:
                 return kp["id"]
         return None
 

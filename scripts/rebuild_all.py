@@ -7,11 +7,12 @@
     PYTHONPATH=src .venv/Scripts/python -m scripts.rebuild_all --milvus-only  # 仅从 PG 重建 Milvus
 
 流程：
-  阶段 A：解析 PDF → 合并标题 → 构建知识点树 → PG 入库（KP 树）
+  阶段 A：解析 PDF → 合并标题 → 构建知识点树 → PG 入库（KP 树，幂等去重）
   阶段 B：逐 PDF 调用 run_ingestion(preparsed_content_list=...)
           → 切分 → KP 分配 → SummaryBridge → BGE-M3 编码 → Milvus + PG 入库
 
 特性：
+  - 增量导入：已有 KP/Document/Unit 数据不受影响，_ensure_kp_tree 自动去重
   - 每本 PDF 只解析一次（MinerU），同一课程多卷教材共享知识点树
   - 支持 --milvus-only：从已有 PG 数据编码入库，无需重新解析 PDF
   - 单本失败不中断，最后打印汇总
@@ -31,6 +32,8 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+
+logger = logging.getLogger("rebuild_all")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -80,10 +83,10 @@ async def process_course_full(
     *,
     milvus_only: bool = False,
 ) -> dict:
-    """完整处理一门课程：解析 → KP 树 → 切分 → SummaryBridge → 编码 → PG + Milvus"""
+    """增量处理一门课程：解析 → KP 树 → 切分 → SummaryBridge → 编码 → PG + Milvus"""
     from coursepilot.db import get_session_etx
     from coursepilot.models import Course, KnowledgePoint, Document, KnowledgeUnit, User
-    from sqlalchemy import select, delete
+    from sqlalchemy import select
 
     total_start = time.time()
     stats = {
@@ -124,6 +127,7 @@ async def process_course_full(
                     "_unit_id": str(ku.id),
                     "kp_id": str(ku.kp_id) if ku.kp_id else "",
                     "content": ku.content,
+                    "document_id": str(ku.document_id) if ku.document_id else "",
                     "kp_path": "",  # 下面从 KP 表查
                 }
                 for ku in units
@@ -167,7 +171,11 @@ async def process_course_full(
         t0 = time.time()
 
         try:
-            content_list, _headings = await parse_file(str(pdf_path))
+            if pdf_path.suffix.lower() == ".pdf":
+                content_list, _headings = await _parse_pdf_in_batches(str(pdf_path))
+            else:
+                # docx / md 文件小，直接解析
+                content_list, _headings = await parse_file(str(pdf_path))
         except Exception as e:
             print(f"  ❌ 解析失败: {e}")
             stats["pdfs"].append({
@@ -213,30 +221,13 @@ async def process_course_full(
         else:
             print(f"     📚 课程已存在: {course.name} (id={course.id})")
 
-        # 3b. 清除旧数据
-        await session.execute(
-            delete(KnowledgeUnit).where(
-                KnowledgeUnit.document_id.in_(
-                    select(Document.id).where(Document.course_id == course.id)
-                )
-            )
-        )
-        await session.execute(
-            delete(Document).where(Document.course_id == course.id)
-        )
-        await session.execute(
-            delete(KnowledgePoint).where(KnowledgePoint.course_id == course.id)
-        )
-        await session.flush()
-        print(f"     🧹 已清除旧数据（KP + Document + Unit）")
-
-        # 3c. 查找 uploader
+        # 3b. 查找 uploader
         r = await session.execute(
             select(User).where(User.role == "super").limit(1)
         )
         uploader = r.scalar_one()
 
-        # 3d. 为每卷 PDF 创建 Document → 调用 run_ingestion（自动构建 KP 树）
+        # 3c. 为每卷 PDF 创建 Document → 调用 run_ingestion（自动构建 KP 树）
         from coursepilot.ingestion.pipeline import run_ingestion
 
         for pd in pdf_data:
@@ -354,6 +345,7 @@ async def _encode_and_insert(units: list[dict], course_id: str) -> int:
         for u, vec in zip(batch, vecs):
             payloads.append({
                 "uuid": u["_unit_id"],
+                "document_id": u.get("document_id", ""),
                 "dense_vec": vec["dense"],
                 "sparse_vec": vec["sparse"],
                 "kp_id": u.get("kp_id", ""),
@@ -370,6 +362,74 @@ async def _encode_and_insert(units: list[dict], course_id: str) -> int:
 
     print(f"     ✅ Milvus: {total_inserted}/{len(units)} 条入库")
     return total_inserted
+
+
+# ═══════════════════════════════════════════════════════════════
+# 分批 PDF 解析（避免 MinerU 一次加载全部页面的 MemoryError）
+# ═══════════════════════════════════════════════════════════════
+
+async def _parse_pdf_in_batches(
+    pdf_path: str,
+    batch_size: int = 15,
+) -> tuple[list[dict], list[dict]]:
+    """分批解析 PDF，每批 batch_size 页，合并 content_list + headings。
+
+    MinerU 在 Windows 下用 multiprocessing 加载 PDF 图像，高分辨率
+    扫描页的图像数据 pickle 序列化时容易 MemoryError。分批缩小每次
+    加载的页数范围，绕过 IPC 内存瓶颈。
+    """
+    import fitz  # PyMuPDF — MinerU 的依赖，可直接用
+
+    pdf_doc = fitz.open(pdf_path)
+    total_pages = pdf_doc.page_count
+    pdf_doc.close()
+
+    logger.info("PDF 共 %d 页，分批解析（每批 %d 页）", total_pages, batch_size)
+
+    from coursepilot.ingestion.pdf_parser import parse_pdf
+    from coursepilot.knowledge.syllabus_parser import extract_headings
+
+    all_content = []
+
+    for batch_start in range(0, total_pages, batch_size):
+        batch_end = min(batch_start + batch_size, total_pages) - 1
+        logger.info("  解析第 %d~%d 页...", batch_start + 1, batch_end + 1)
+
+        try:
+            result = await parse_pdf(
+                pdf_path,
+                start_page=batch_start,
+                end_page=batch_end,
+            )
+        except Exception as e:
+            logger.error("第 %d~%d 页解析失败: %s", batch_start + 1, batch_end + 1, e)
+            raise
+
+        batch_content = result.get("content_list", [])
+        if not batch_content:
+            logger.warning("第 %d~%d 页解析结果为空，跳过", batch_start + 1, batch_end + 1)
+            continue
+
+        # page_idx 校正：MinerU 返回的 page_idx 可能是 batch 内相对值
+        # （从 0 开始），需要修正为绝对页码
+        if batch_content and batch_content[0].get("page_idx", 0) < batch_start:
+            for item in batch_content:
+                if "page_idx" in item:
+                    item["page_idx"] = item["page_idx"] + batch_start
+
+        all_content.extend(batch_content)
+        logger.info(
+            "第 %d~%d 页完成: %d 条（累计 %d 条）",
+            batch_start + 1, batch_end + 1,
+            len(batch_content), len(all_content),
+        )
+
+    if not all_content:
+        raise ValueError("解析结果为空，请检查文件是否可读")
+
+    headings = extract_headings(all_content)
+    logger.info("分批解析完成: 共 %d 条 content_list, %d 个标题", len(all_content), len(headings))
+    return all_content, headings
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -402,23 +462,12 @@ async def main():
     print("=" * 70)
 
     if not args.milvus_only and not args.yes:
-        print("\n⚠  此操作将清除课程的旧 KP/Document/Unit 数据并重新解析 PDF。")
+        print("\n⚠  此操作将解析 PDF 并增量导入课程（已有数据不受影响）。")
         print("   MinerU 解析 8 本教材可能需要 40 分钟 ~ 数小时。")
         resp = input("\n  确认继续？[y/N] ").strip().lower()
         if resp not in ("y", "yes"):
             print("  已取消")
             return
-
-    # 如果是完整模式，先重建 Milvus collection
-    if not args.milvus_only:
-        try:
-            from coursepilot.rag.vector_store import VectorStore
-            store = VectorStore()
-            store.drop_collection()
-            store.create_collection()
-            print("\n✅ Milvus collection 已重建\n")
-        except Exception as e:
-            print(f"\n⚠ Milvus 初始化失败: {e}\n")
 
     global_start = time.time()
     all_stats: list[dict] = []
@@ -441,7 +490,7 @@ async def main():
     # ── 汇总 ──
     total_elapsed = time.time() - global_start
     print(f"\n{'=' * 70}")
-    print(f"  重建完成")
+    print(f"  导入完成")
     print(f"{'=' * 70}")
     print(f"  总耗时: {total_elapsed / 60:.1f} 分钟 ({total_elapsed:.0f}s)")
 

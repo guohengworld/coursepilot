@@ -3,6 +3,10 @@
 启动方式：
     uvicorn coursepilot.main:app --reload
 """
+import os
+# 必须在任何 PyTorch 导入之前设置，防止 CUDA 内存碎片化
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI

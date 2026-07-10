@@ -29,9 +29,21 @@ def parse_markdown(file_path: str) -> dict[str, Any]:
     lines = text.splitlines()
     items: list[dict] = []
 
+    in_code_block = False
+
     for line in lines:
         stripped = line.strip()
         if not stripped:
+            continue
+
+        # 检测代码块 fence（``` 或 ~~~）
+        if re.match(r'^(`{3,}|~{3,})', stripped):
+            in_code_block = not in_code_block
+            continue
+
+        # 代码块内部：全部当正文，不解析 heading
+        if in_code_block:
+            items.append({"type": "text", "text": stripped, "text_level": 99, "page_idx": 0})
             continue
 
         # 标题行：# 数量 = text_level，最多 4 级

@@ -427,24 +427,44 @@ class TestHeadingsToSyllabus:
         """从 level 1 直接跳到 level 3（跳过 level 2）"""
         from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
         headings = [
-            {"title": "章",   "level": 1, "page_idx": 0},
+            {"title": "第一章", "level": 1, "page_idx": 0},
             {"title": "小节", "level": 3, "page_idx": 1},
         ]
         nodes = headings_to_syllabus(headings, "BK")
         assert len(nodes) == 2
-        assert nodes[1]["kp_path"] == "BK/章/小节"
+        assert nodes[1]["kp_path"] == "BK/第一章/小节"
 
     def test_sort_order(self):
         from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
         headings = [
-            {"title": "A", "level": 1, "page_idx": 0},
-            {"title": "B", "level": 2, "page_idx": 1},
-            {"title": "C", "level": 2, "page_idx": 2},
+            {"title": "第一章", "level": 1, "page_idx": 0},
+            {"title": "代数", "level": 2, "page_idx": 1},
+            {"title": "几何", "level": 2, "page_idx": 2},
         ]
         nodes = headings_to_syllabus(headings, "X")
         assert nodes[0]["sort_order"] == 1
         assert nodes[1]["sort_order"] == 1  # level 2 的第一个
         assert nodes[2]["sort_order"] == 2  # level 2 的第二个
+
+    def test_dot_numbered_not_bumped_by_simple_number_context(self):
+        """dot-numbered 标题（"4.3"）不应被上下文感知 bump 影响，
+        即使栈顶是更深层级的非编号标题（"高级"）。
+        场景：阶段四/4.2/Crew高级/4.3 → 4.3 应与 4.2 同级。"""
+        from coursepilot.knowledge.syllabus_parser import headings_to_syllabus
+        headings = [
+            {"title": "阶段四 · Crew 团队编排", "level": 1, "page_idx": 0},
+            {"title": "4.2 Crew 全部属性",      "level": 2, "page_idx": 1},
+            {"title": "高级",                    "level": 3, "page_idx": 2},
+            {"title": "4.3 执行与输出",         "level": 2, "page_idx": 3},
+        ]
+        nodes = headings_to_syllabus(headings, "AI")
+        paths = [n["kp_path"] for n in nodes]
+        assert paths == [
+            "AI/阶段四 · Crew 团队编排",
+            "AI/阶段四 · Crew 团队编排/4.2 Crew 全部属性",
+            "AI/阶段四 · Crew 团队编排/4.2 Crew 全部属性/高级",
+            "AI/阶段四 · Crew 团队编排/4.3 执行与输出",  # 与 4.2 同级，不在高级下面
+        ]
 
 
 # ═══════════════════════════════════════════════════════════
@@ -556,13 +576,12 @@ class TestEndToEndMarkdown:
 
         fcfs = next((b for b in assigned if "FCFS" in b["content"]), None)
         assert fcfs is not None
-        # heading context 优先：正文在"进程管理"标题下 → uuid-1001
-        assert fcfs is not None
-        assert fcfs["kp_id"] == "uuid-1001"
+        # meta_data.heading="进程调度" 正确匹配 → uuid-1002
+        assert fcfs["kp_id"] == "uuid-1002"
 
         sjf = next((b for b in assigned if "SJF" in b["content"]), None)
         assert sjf is not None
-        assert sjf["kp_id"] == "uuid-1001"
+        assert sjf["kp_id"] == "uuid-1002"
 
     def test_kp_path_consistency(self, tmp_path, kp_nodes):
         """每个已分配的块都应有非空 kp_path"""

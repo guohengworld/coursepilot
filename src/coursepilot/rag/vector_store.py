@@ -84,6 +84,7 @@ class VectorStore:
         )
         schema.add_field("id", DataType.INT64, is_primary=True, auto_id=True)
         schema.add_field("uuid", DataType.VARCHAR, max_length=36)
+        schema.add_field("document_id", DataType.VARCHAR, max_length=36)
         schema.add_field("dense_vec", DataType.FLOAT_VECTOR, dim=DIM)
         schema.add_field("sparse_vec", DataType.SPARSE_FLOAT_VECTOR)
         schema.add_field("kp_id", DataType.VARCHAR, max_length=36)
@@ -132,7 +133,7 @@ class VectorStore:
         批量插入向量
 
         :param vectors: [{
-            "uuid": str, "dense_vec": list[float], "sparse_vec": dict[int, float],
+            "uuid": str, "document_id": str, "dense_vec": list[float], "sparse_vec": dict[int, float],
             "kp_id": str, "course_id": str, "kp_path": str, "content": str,
         }, ...]
         :return: insert_ids (list[int])
@@ -143,6 +144,7 @@ class VectorStore:
         data = [
             {
                 "uuid": v["uuid"],
+                "document_id": v.get("document_id", ""),
                 "dense_vec": v["dense_vec"],
                 "sparse_vec": v["sparse_vec"],
                 "kp_id": v["kp_id"],
@@ -252,6 +254,12 @@ class VectorStore:
         filter_expr = f'course_id == "{course_id}"'
         self.client.delete(collection_name=COLLECTION_NAME, filter=filter_expr)
         logger.info("Milvus 删除课程 %s 的所有向量", course_id)
+
+    def delete_by_document(self, document_id: str) -> None:
+        """删除某文档的全部向量（需要 schema 中有 document_id 字段）"""
+        filter_expr = f'document_id == "{document_id}"'
+        self.client.delete(collection_name=COLLECTION_NAME, filter=filter_expr)
+        logger.info("Milvus 删除文档 %s 的所有向量", document_id)
 
     def count(self) -> int:
         """collection 中向量总数"""
