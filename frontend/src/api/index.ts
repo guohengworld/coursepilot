@@ -110,4 +110,4 @@ export {
   getKnowledgePoints,
   askQuestion,
 } from './courses'
-export { chat, getSession, approveSession } from './agent'
+export { chat, getSession, listSessions, approveSession, deleteSession } from './agent'

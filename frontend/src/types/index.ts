@@ -81,20 +81,46 @@ export interface AskResponse {
 export interface ChatRequest {
   message: string
   course_id: string
+  session_id?: string
 }
 
-export interface ChatResponse {
+export interface ChatAcceptedResponse {
   session_id: string
+  status: string
+}
+
+export interface DiagnosisData {
+  overall_rate: number
+  total_practiced: number
+  kp_stats: Record<string, { total: number; correct: number; rate: number }>
+  weak_kps: string[]
+  llm_analysis: string
+  recommendations: string
+}
+
+export interface SessionPollResponse {
+  session_id: string
+  course_id: string
+  status: string
   intent: string
-  answer: string
-  sources: Record<string, unknown>[]
+  query: string | null
+  answer: string | null
+  sources: Record<string, unknown>[] | null
+  questions: QuizQuestion[] | null
+  diagnosis_data: DiagnosisData | null
   token_count: number
+  estimated_cost: number
+  conversation: { role: string; content: string; intent?: string | null }[] | null
+  created_at: string
+  updated_at: string
 }
 
-export interface SessionStatus {
+export interface SessionListItem {
   session_id: string
+  course_id: string
   intent: string
   status: string
+  query: string | null
   token_count: number
   estimated_cost: number
   created_at: string
@@ -104,6 +130,41 @@ export interface SessionStatus {
 // ===== Common =====
 export interface ApiError {
   detail: string
+}
+
+// ===== Practice =====
+export interface QuizQuestion {
+  index: number
+  question_text: string
+  options: Record<string, string>
+  kp_path: string
+}
+
+export interface QuizResponse {
+  session_id: string
+  questions: QuizQuestion[]
+}
+
+export interface SubmitRequest {
+  answers: Record<string, string>
+}
+
+export interface QuestionResult {
+  index: number
+  question_text: string
+  correct: boolean
+  student_answer: string
+  correct_answer: string
+  explanation: string
+  kp_path: string
+}
+
+export interface SubmitResponse {
+  session_id: string
+  total: number
+  correct: number
+  score: number
+  results: QuestionResult[]
 }
 
 export interface ApiResult<T> {
