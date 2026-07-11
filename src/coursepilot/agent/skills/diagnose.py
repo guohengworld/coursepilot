@@ -1,14 +1,17 @@
 """学情诊断 Skill
 
 聚合 PracticeRecord → 按 KP 计算正确率 → 识别薄弱点
+→ LLM 生成深度分析和学习建议
 支持可配时间窗口、可配阈值、超时防护。
 """
+import json
 import logging
 import time
 from datetime import datetime, timezone, timedelta
 from typing import TypedDict
 from uuid import UUID
 
+from openai import AsyncOpenAI
 from sqlalchemy import Integer, and_, func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -162,3 +165,85 @@ async def diagnose(
         total_practiced=total_answered,
         overall_rate=round(overall_rate, 2),
     )
+
+
+DIAGNOSE_ANALYSIS_SYSTEM = """你是一个学情诊断分析专家。根据学生的练习题统计结果，生成诊断分析报告。
+
+请输出 JSON 格式（不要 markdown 包裹，纯 JSON）：
+{
+  "analysis": "详细的学情分析，包括：1) 整体表现评价 2) 各知识点掌握情况分析 3) 薄弱知识点的问题定位（概念混淆、计算错误、审题偏差等）",
+  "recommendations": "分步学习建议，包括：1) 复习优先级和顺序 2) 针对每个薄弱点的具体复习方法 3) 后续练习建议"
+}
+
+要求：
+- 分析要具体，引用知识点名称和正确率数据
+- 建议要可操作，给出具体的学习方法（如：回顾教材第X章、做针对性练习等）
+- 语气积极鼓励，帮助学生建立信心
+- 使用中文
+- 只输出 JSON，不要额外文字"""
+
+
+async def generate_llm_analysis(
+    diagnosis: DiagnosisResult,
+) -> tuple[str, str, dict]:
+    """调用 LLM 生成深度学情分析和学习建议
+
+    Returns:
+        (analysis, recommendations, token_info)
+    """
+    if not settings.llm_api_key or diagnosis["total_practiced"] == 0:
+        return "", "", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+    kp_lines = []
+    for kp_path, stat in sorted(
+        diagnosis["kp_stats"].items(), key=lambda x: x[1]["rate"],
+    ):
+        kp_lines.append(
+            f"- {kp_path}: 正确率 {stat['rate']:.0%} ({stat['correct']}/{stat['total']})"
+        )
+
+    weak_text = "、".join(diagnosis["weak_kps"]) if diagnosis["weak_kps"] else "无"
+    prompt_parts = [
+        f"学生总练习量：{diagnosis['total_practiced']} 题",
+        f"总正确率：{diagnosis['overall_rate']:.0%}",
+        f"薄弱知识点：{weak_text}",
+        "\n各知识点详情：",
+        "\n".join(kp_lines),
+    ]
+
+    client = AsyncOpenAI(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+    )
+    try:
+        response = await client.chat.completions.create(
+            model=settings.llm_model,
+            messages=[
+                {"role": "system", "content": DIAGNOSE_ANALYSIS_SYSTEM},
+                {"role": "user", "content": "\n".join(prompt_parts)},
+            ],
+            temperature=0.5,
+            response_format={"type": "json_object"},
+            max_tokens=2000,
+        )
+        content = response.choices[0].message.content
+        usage = response.usage
+        token_info = {
+            "prompt_tokens": usage.prompt_tokens if usage else 0,
+            "completion_tokens": usage.completion_tokens if usage else 0,
+            "total_tokens": usage.total_tokens if usage else 0,
+        }
+
+        if not content:
+            logger.warning("generate_llm_analysis: 模型返回空")
+            return "", "", token_info
+
+        result = json.loads(content)
+        return (
+            result.get("analysis", ""),
+            result.get("recommendations", ""),
+            token_info,
+        )
+    except (json.JSONDecodeError, Exception) as e:
+        logger.warning("generate_llm_analysis 失败: %s", e)
+        return "", "", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coursepilot.agent.context import build_context as build_context_logic
 from coursepilot.agent.profile_updater import update_profile
 from coursepilot.agent.skills.classify_intent import classify_intent
-from coursepilot.agent.skills.diagnose import diagnose
+from coursepilot.agent.skills.diagnose import diagnose, generate_llm_analysis
 from coursepilot.agent.skills.evaluate_quiz import evaluate_quiz
 from coursepilot.agent.skills.generate_quiz import generate_quiz
 from coursepilot.agent.skills.get_mastery import get_mastery
@@ -140,7 +140,28 @@ async def finalize_node(state: dict) -> dict:
                 session, state["session_id"],
                 state.get("intent", "question"),
                 human_review_result=state.get("human_review_result"),
+                quiz_data=state.get("quiz_data"),
+                answer=state.get("answer", ""),
+                sources=state.get("sources", []),
+                query=state.get("query", ""),
             )
+
+            # ── Step E: 保存学情诊断报告 ──
+            diagnosis = state.get("diagnosis")
+            if diagnosis and diagnosis.get("total_practiced", 0) > 0:
+                from coursepilot.models import DiagnosisReport
+                report = DiagnosisReport(
+                    user_id=UUID(state["user_id"]),
+                    course_id=UUID(state["course_id"]),
+                    session_id=UUID(state["session_id"]),
+                    overall_rate=diagnosis["overall_rate"],
+                    total_practiced=diagnosis["total_practiced"],
+                    kp_stats=diagnosis.get("kp_stats"),
+                    weak_kps=diagnosis.get("weak_kps", []),
+                    llm_analysis=diagnosis.get("llm_analysis"),
+                    recommendations=diagnosis.get("recommendations"),
+                )
+                session.add(report)
 
             # ── 提交事务 ──
             await session.commit()
@@ -173,15 +194,35 @@ async def finalize_node(state: dict) -> dict:
 
 async def _update_session_intent(
     session: AsyncSession, session_id: str, intent: str,
-    human_review_result: str | None = None
+    human_review_result: str | None = None,
+    quiz_data: dict | None = None,
+    answer: str | None = None,
+    sources: list[dict] | None = None,
+    query: str | None = None,
 ) -> None:
-    """更新 agent_session 的 intent 字段"""
+    """更新 agent_session 的 intent、answer、sources、quiz_data、conversation 等字段"""
     result = await session.execute(
         select(AgentSession).where(AgentSession.id == UUID(session_id))
     )
     agent_session = result.scalar_one_or_none()
     if agent_session:
         agent_session.intent = intent
+        if answer is not None:
+            agent_session.answer = answer
+        if sources is not None:
+            agent_session.sources = sources
+        if quiz_data and intent in ("practice", "review"):
+            agent_session.quiz_data = quiz_data
+        # 追加到多轮对话
+        conv = list(agent_session.conversation or [])
+        if query:
+            conv.append({"role": "user", "content": query, "intent": None})
+        conv.append({
+            "role": "assistant",
+            "content": answer or "",
+            "intent": intent,
+        })
+        agent_session.conversation = conv
         if human_review_result == "rejected":
             agent_session.status = "rejected"
         else:
@@ -254,17 +295,49 @@ async def create_plan_node(state: dict) -> dict:
         "error": None,
     }
 
-async def diagnose_node(state:dict) -> dict:
-    """学情诊断 → state["diagnosis"] + state["answer"]"""
+async def diagnose_node(state: dict) -> dict:
+    """学情诊断 → state["diagnosis"] + state["answer"]
+
+    调用聚合统计 + LLM 分析，组合为完整诊断报告。
+    持久化由 finalize_node 统一处理。
+    """
     try:
         async with async_session_factory() as session:
             diagnosis = await diagnose(
                 session=session,
                 user_id=state["user_id"],
-                course_id=state["course_id"]
+                course_id=state["course_id"],
             )
-        answer = diagnosis.get("summary", "")
-        return {"diagnosis": diagnosis, "answer": answer, "error": None}
+
+        # 无练习记录时跳过 LLM
+        if diagnosis["total_practiced"] == 0:
+            answer = "暂无练习记录，请先做一些练习题再来进行学情诊断。"
+            diagnosis["llm_analysis"] = ""
+            diagnosis["recommendations"] = ""
+            return {"diagnosis": diagnosis, "answer": answer, "error": None}
+
+        # LLM 深度分析
+        analysis, recommendations, token_info = await generate_llm_analysis(diagnosis)
+        llm_calls = list(state.get("llm_calls", []))
+        llm_calls.append({"node": "diagnose", **token_info})
+
+        # 组合回答文本
+        answer_parts = [diagnosis.get("summary", "")]
+        if analysis:
+            answer_parts.append(f"\n📊 深度分析\n{analysis}")
+        if recommendations:
+            answer_parts.append(f"\n📌 学习建议\n{recommendations}")
+        answer = "\n\n".join(answer_parts)
+
+        diagnosis["llm_analysis"] = analysis
+        diagnosis["recommendations"] = recommendations
+
+        return {
+            "diagnosis": diagnosis,
+            "answer": answer,
+            "llm_calls": llm_calls,
+            "error": None,
+        }
     except Exception as e:
         logger.exception("diagnose_node 异常")
         return {"diagnosis": {}, "answer": "诊断失败，请稍后再试", "error": str(e)}

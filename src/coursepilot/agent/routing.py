@@ -10,17 +10,18 @@ def route_by_intent(state: dict) -> str:
     """classify 节点后根据 intent 路由
 
     Returns:
-        "human_review" — practice / review（需要掌握度）
-        "diagnose"    — diagnose
-        "query_rag"   — question / code_help（默认 RAG 问答）
+        "human_review" — 需要审批的路径（暂未启用）
+        "get_mastery"  — practice / review（需要掌握度）
+        "diagnose"     — diagnose
+        "query_rag"    — question / code_help（默认 RAG 问答）
     """
     intent = state.get("intent", "")
     if intent == "question":
         return "query_rag"
     elif intent == "practice":
-        return "human_review"  # 改为走 human_review 而非 get_mastery
+        return "get_mastery"
     elif intent == "review":
-        return "human_review"  # 改为走 human_review 而非 get_mastery
+        return "get_mastery"
     elif intent == "diagnose":
         return "diagnose"
     elif intent == "code_help":

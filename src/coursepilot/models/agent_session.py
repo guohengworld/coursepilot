@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from coursepilot.db import Base
@@ -44,6 +44,21 @@ class AgentSession(Base):
     )
     langgraph_thread_id: Mapped[str | None] = mapped_column(
         String(100), comment="LangGraph checkpoint thread_id",
+    )
+    quiz_data: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, comment="练习题数据（含问题、选项、答案）",
+    )
+    query: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="用户原始提问",
+    )
+    answer: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="Agent 回答文本",
+    )
+    sources: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, comment="引用来源列表",
+    )
+    conversation: Mapped[list | None] = mapped_column(
+        JSONB, nullable=True, default=list, comment="多轮对话历史 [{'role', 'content', 'intent'}]",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,

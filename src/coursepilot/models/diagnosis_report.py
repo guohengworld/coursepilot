@@ -1,17 +1,26 @@
+"""学情诊断报告模型（聚合级别）
+
+存储每次学情诊断的完整结果，包括：
+- 整体统计数据（总题数、正确率）
+- 各知识点细粒度统计
+- LLM 生成的深度分析和学习建议
+"""
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+import sqlalchemy as sa
+from sqlalchemy import DateTime, Float, Integer, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from coursepilot.db import Base
 
 
 class DiagnosisReport(Base):
-    """错题诊断报告。
+    """学情诊断报告（聚合级别）。
 
-    系统对学生的错误答案进行自动分析，定位原因并推荐复习知识点。
+    系统根据学生练习记录进行聚合分析，识别薄弱知识点，
+    并由 LLM 生成个性化学习建议。
     """
     __tablename__ = "diagnosis_reports"
 
@@ -20,25 +29,40 @@ class DiagnosisReport(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
-    practice_record_id: Mapped[uuid.UUID] = mapped_column(
+    course_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("practice_records.id", ondelete="CASCADE"),
+        sa.ForeignKey("courses.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
-    error_reason: Mapped[str] = mapped_column(Text, nullable=False, comment="错误原因",)
-    error_category: Mapped[str] = mapped_column(
-        String(32), nullable=False, comment="错误类别",
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        sa.ForeignKey("agent_sessions.id", ondelete="SET NULL"),
+        nullable=True, index=True,
     )
-    remedy_kp_ids: Mapped[list | None] = mapped_column(
-        ARRAY(UUID(as_uuid=True)), default=list, comment="建议知识点 ID",
+    overall_rate: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, comment="总体正确率",
     )
-    report_content: Mapped[str] = mapped_column(Text, nullable=False, comment="报告内容",)
+    total_practiced: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, comment="总练习题目数",
+    )
+    kp_stats: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, comment="各知识点统计 {kp_path: {total, correct, rate}}",
+    )
+    weak_kps: Mapped[list | None] = mapped_column(
+        JSONB, nullable=True, comment="薄弱知识点路径列表",
+    )
+    llm_analysis: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="LLM 生成的深度分析",
+    )
+    recommendations: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="LLM 生成的学习建议",
+    )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False, comment="创建时间",
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
     )
 
     def __repr__(self) -> str:
-        return f"<Diagnosis {self.error_category}>"
+        return f"<DiagnosisReport user={self.user_id} rate={self.overall_rate:.0%}>"

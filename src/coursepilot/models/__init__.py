@@ -1,13 +1,14 @@
 """SQLAlchemy ORM 模型，与 System_Design 中的 DDL 一一对应。
 
-9 张业务表 + 2 张辅助表（eval_metrics, review_plans）。
+11 张业务表 + 2 张辅助表（eval_metrics, review_plans）。
 
 关系概览：
     User ──1:N──→ PracticeRecord ──N:1──→ Question
-      │                                      │
-      ├──1:N──→ DiagnosisReport ──────N:1────┘
+      │
+      ├──1:N──→ DiagnosisReport ──N:1──→ Course
       ├──1:N──→ ReviewPlan
       ├──1:N──→ QARecord
+      ├──1:N──→ AgentSession ────N:1──→ DiagnosisReport
       └──1:N──→ Document ──N:1──→ Course ➝ KnowledgePoint ➝ KnowledgeUnit
 """
 

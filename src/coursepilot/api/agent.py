@@ -3,41 +3,59 @@
 遵循与 api/auth.py、api/courses.py 相同的模式：
 APIRouter + Depends(get_session) + Depends(get_current_user)。
 """
+import asyncio
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from langgraph.types import Command
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.agent.graph import build_agent_graph
 from coursepilot.api.deps import get_current_user
-from coursepilot.db import get_session
+from coursepilot.db import async_session_factory, get_session
 from coursepilot.governance.guardrails import guard_token_limit
-from coursepilot.models import AgentSession, User
+from coursepilot.models import AgentSession, DiagnosisReport, User
 
-from langgraph.types import Command
-
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 # Request / Response Models
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     course_id: str = Field(..., description="课程 ID（UUID）")
+    session_id: str | None = Field(None, description="已有会话 ID，用于继续多轮对话")
 
-class ChatResponse(BaseModel):
+class ChatAcceptedResponse(BaseModel):
     session_id: str
-    intent: str
-    answer: str
-    sources: list[dict]
-    token_count: int
+    status: str = "processing"
 
-class SessionStatusResponse(BaseModel):
+class SessionListItem(BaseModel):
     session_id: str
+    course_id: str
     intent: str
     status: str
-    token_count: int
-    estimated_cost: float
+    query: str | None = None
+    token_count: int = 0
+    estimated_cost: float = 0
+    created_at: str
+    updated_at: str
+
+class SessionPollResponse(BaseModel):
+    session_id: str
+    course_id: str
+    status: str
+    intent: str
+    query: str | None = None
+    answer: str | None = None
+    sources: list[dict] | None = None
+    questions: list[dict] | None = None
+    diagnosis_data: dict | None = None  # 学情诊断结构化数据
+    token_count: int = 0
+    estimated_cost: float = 0
+    conversation: list[dict] | None = None
     created_at: str
     updated_at: str
 
@@ -50,21 +68,41 @@ async def _get_graph():
         _graph_app = await build_agent_graph()
     return _graph_app
 
+
+async def _run_graph_background(
+    graph, initial_state: dict, config: dict, session_id: str
+) -> None:
+    """后台执行 LangGraph，异常时将会话标记为 failed"""
+    try:
+        await graph.ainvoke(initial_state, config)
+        # finalize_node 已负责写入所有数据
+    except Exception:
+        logger.exception("后台图执行失败 session_id=%s", session_id)
+        async with async_session_factory() as bg_session:
+            result = await bg_session.execute(
+                select(AgentSession).where(AgentSession.id == UUID(session_id))
+            )
+            agent_session = result.scalar_one_or_none()
+            if agent_session:
+                agent_session.status = "failed"
+                agent_session.intent = "error"
+            await bg_session.commit()
+
+
 # API 端点
-@router.post("/chat", status_code=201)
+@router.post("/chat", status_code=202)
 async def chat(
     request: ChatRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """主入口：发送消息给 Agent，执行完整 workflow 并返回回答"""
+    """主入口：创建或继续会话，后台执行 LangGraph workflow"""
     # ── RBAC 检查 ──
     from coursepilot.governance.rbac import has_permission
     if not has_permission(current_user.role, "agent:chat"):
         raise HTTPException(status_code=403, detail="无权使用 Agent")
 
     # ── Daily limit guard ──
-    from coursepilot.governance.guardrails import guard_daily_limit
     from coursepilot.observability.metrics import get_today_token_usage
     daily_tokens = await get_today_token_usage(str(current_user.id))
     limit_msg = guard_token_limit(
@@ -73,52 +111,117 @@ async def chat(
     if limit_msg:
         raise HTTPException(status_code=429, detail=limit_msg)
 
-    # 创建会话记录
-    agent_session = AgentSession(
-        user_id=current_user.id,
-        course_id=UUID(request.course_id),
-        intent="pending",
-        status="running"
-    )
-    session.add(agent_session)
-    await session.flush()
+    # ── 继续已有会话 ──
+    if request.session_id:
+        result = await session.execute(
+            select(AgentSession).where(AgentSession.id == UUID(request.session_id))
+        )
+        agent_session = result.scalar_one_or_none()
+        if not agent_session:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        if agent_session.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="无权访问此会话")
+        if agent_session.status not in ("completed", "failed", "rejected"):
+            raise HTTPException(status_code=400, detail="会话正在处理中，请稍后")
 
-    # 2. 构建初始状态
-    initial_state = {
-        "query": request.message,
-        "course_id": request.course_id,
-        "user_id": str(current_user.id),
-        "session_id": str(agent_session.id),
-        "messages": [],
-        "course_context": {},
-        "user_profile": None,
-        "recent_qa": [],
-        "intent": "",
-        "context": "",
-        "retrieved_metadata": {},
-        "answer": "",
-        "sources": [],
-        "token_count": 0,
-        "llm_calls": [],
-        "error": None,
-    }
+        # 更新 session 准备新一轮
+        agent_session.query = request.message
+        agent_session.status = "processing"
+        agent_session.answer = ""
+        await session.commit()
 
-    # 3. 执行 LangGraph
+        initial_state = {
+            "query": request.message,
+            "course_id": str(agent_session.course_id),
+            "user_id": str(current_user.id),
+            "session_id": str(agent_session.id),
+            "messages": agent_session.conversation or [],
+            "course_context": {},
+            "user_profile": None,
+            "recent_qa": [],
+            "intent": "",
+            "context": "",
+            "retrieved_metadata": {},
+            "answer": "",
+            "sources": [],
+            "token_count": 0,
+            "llm_calls": [],
+            "error": None,
+        }
+
+        thread_id = agent_session.langgraph_thread_id or str(agent_session.id)
+        config = {"configurable": {"thread_id": thread_id}}
+    else:
+        # ── 创建新会话 ──
+        agent_session = AgentSession(
+            user_id=current_user.id,
+            course_id=UUID(request.course_id),
+            query=request.message,
+            intent="pending",
+            status="processing",
+        )
+        session.add(agent_session)
+        await session.commit()
+
+        initial_state = {
+            "query": request.message,
+            "course_id": request.course_id,
+            "user_id": str(current_user.id),
+            "session_id": str(agent_session.id),
+            "messages": [],
+            "course_context": {},
+            "user_profile": None,
+            "recent_qa": [],
+            "intent": "",
+            "context": "",
+            "retrieved_metadata": {},
+            "answer": "",
+            "sources": [],
+            "token_count": 0,
+            "llm_calls": [],
+            "error": None,
+        }
+
+        config = {"configurable": {"thread_id": str(agent_session.id)}}
+
+    # 后台执行（不阻塞请求）
     graph = await _get_graph()
-    config = {"configurable": {"thread_id": str(agent_session.id)}}
-    result = await graph.ainvoke(initial_state, config)
+    asyncio.create_task(_run_graph_background(graph, initial_state, config, str(agent_session.id)))
 
-    # 4. 写回 classify 结果
-    if result.get("intent"):
-        agent_session.intent = result["intent"]
-
-    return ChatResponse(
+    return ChatAcceptedResponse(
         session_id=str(agent_session.id),
-        intent=result.get("intent", "question"),
-        answer=result.get("answer", ""),
-        sources=result.get("sources", []),
-        token_count=result.get("token_count", 0),
+        status="processing",
     )
+
+
+@router.get("/sessions")
+async def list_sessions(
+    current_user: User = Depends(get_current_user),
+    db_session: AsyncSession = Depends(get_session),
+):
+    """查询当前用户的所有会话列表"""
+    result = await db_session.execute(
+        select(AgentSession)
+        .where(AgentSession.user_id == current_user.id)
+        .order_by(AgentSession.updated_at.desc())
+        .limit(50)
+    )
+    sessions = result.scalars().all()
+    return [
+        SessionListItem(
+            session_id=str(s.id),
+            course_id=str(s.course_id),
+            intent=s.intent,
+            status=s.status,
+            query=s.query,
+            token_count=s.token_count,
+            estimated_cost=float(s.estimated_cost),
+            created_at=s.created_at.isoformat(),
+            updated_at=s.updated_at.isoformat(),
+        )
+        for s in sessions
+    ]
+
 
 @router.get("/sessions/{session_id}")
 async def get_session_status(
@@ -126,7 +229,7 @@ async def get_session_status(
     current_user: User = Depends(get_current_user),
     db_session: AsyncSession = Depends(get_session)
 ):
-    """查询会话状态"""
+    """查询会话状态（轮询端点，返回完整结果）"""
     result = await db_session.execute(
         select(AgentSession).where(AgentSession.id == UUID(session_id))
     )
@@ -136,10 +239,49 @@ async def get_session_status(
     if agent_session.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权访问此会话")
 
-    return SessionStatusResponse(
+    # 从 quiz_data 中剥离答案，只返回题目供前端展示
+    questions = None
+    if agent_session.quiz_data:
+        raw_questions = agent_session.quiz_data.get("questions", [])
+        questions = [
+            {
+                "question_text": q.get("question_text", ""),
+                "options": q.get("options", {}),
+                "kp_path": q.get("kp_path", ""),
+            }
+            for q in raw_questions
+        ]
+
+    # 查询学情诊断报告
+    diagnosis_data = None
+    if agent_session.intent == "diagnose":
+        diag_result = await db_session.execute(
+            select(DiagnosisReport).where(
+                DiagnosisReport.session_id == UUID(session_id)
+            )
+        )
+        diag = diag_result.scalar_one_or_none()
+        if diag:
+            diagnosis_data = {
+                "overall_rate": diag.overall_rate,
+                "total_practiced": diag.total_practiced,
+                "kp_stats": diag.kp_stats,
+                "weak_kps": diag.weak_kps,
+                "llm_analysis": diag.llm_analysis,
+                "recommendations": diag.recommendations,
+            }
+
+    return SessionPollResponse(
         session_id=str(agent_session.id),
+        course_id=str(agent_session.course_id),
         intent=agent_session.intent,
         status=agent_session.status,
+        query=agent_session.query,
+        answer=agent_session.answer or None,
+        sources=agent_session.sources or None,
+        questions=questions,
+        diagnosis_data=diagnosis_data,
+        conversation=agent_session.conversation or None,
         token_count=agent_session.token_count,
         estimated_cost=float(agent_session.estimated_cost),
         created_at=agent_session.created_at.isoformat(),
@@ -153,7 +295,6 @@ async def approve_session(
     db_session: AsyncSession = Depends(get_session),
 ):
     """人工审批：恢复被 interrupt 暂停的图执行"""
-    from coursepilot.agent.graph import build_agent_graph
     from coursepilot.governance.rbac import has_permission
     if not has_permission(current_user.role, "agent:session:list_all"):
         raise HTTPException(status_code=403, detail="无权审批")
@@ -187,3 +328,25 @@ async def approve_session(
         "session_id": session_id,
         "answer": state.get("answer", ""),
     }
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def delete_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db_session: AsyncSession = Depends(get_session),
+):
+    """删除指定会话"""
+    result = await db_session.execute(
+        select(AgentSession).where(AgentSession.id == UUID(session_id))
+    )
+    agent_session = result.scalar_one_or_none()
+    if not agent_session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if agent_session.user_id != current_user.id:
+        from coursepilot.governance.rbac import has_permission
+        if not has_permission(current_user.role, "agent:session:list_all"):
+            raise HTTPException(status_code=403, detail="无权删除此会话")
+
+    await db_session.delete(agent_session)
+    await db_session.commit()
