@@ -168,11 +168,11 @@ class TestGraphStructure:
         assert isinstance(saver, AsyncPostgresSaver)
 
     def test_route_by_intent_routes_properly(self):
-        """Phase 3 根据 intent 路由（practice/review → human_review）"""
+        """根据 intent 路由"""
         from coursepilot.agent.routing import route_by_intent
         assert route_by_intent({"intent": "question"}) == "query_rag"
-        assert route_by_intent({"intent": "practice"}) == "human_review"
-        assert route_by_intent({"intent": "review"}) == "human_review"
+        assert route_by_intent({"intent": "practice"}) == "get_mastery"
+        assert route_by_intent({"intent": "review"}) == "get_mastery"
         assert route_by_intent({"intent": "unknown"}) == "query_rag"
         assert route_by_intent({}) == "query_rag"
 
@@ -428,11 +428,12 @@ class TestContextBuilder:
         mock_qa.answer = "之前的回答"
         mock_qa.kp_path = "OS/进程管理"
 
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = None
-        result.scalars.return_value = result
-        result.all.return_value = [mock_qa] * 3
-        mock_db.execute = AsyncMock(return_value=result)
+        # 两次 execute 分别返回不同的结果
+        up_result = MagicMock()
+        up_result.scalars.return_value.all.return_value = []  # UserProfile 空
+        qa_result = MagicMock()
+        qa_result.scalars.return_value.all.return_value = [mock_qa] * 3  # QARecord
+        mock_db.execute = AsyncMock(side_effect=[up_result, qa_result])
 
         with patch(
             "coursepilot.agent.context.build_course_context",
@@ -461,11 +462,12 @@ class TestContextBuilder:
         up.weak_kps = ["OS/进程同步", "OS/文件系统"]
         up.avg_correct_rate = 0.68
 
-        result = MagicMock()
-        result.scalar_one_or_none.return_value = up
-        result.scalars.return_value = result
-        result.all.return_value = []
-        mock_db.execute = AsyncMock(return_value=result)
+        # 两次 execute 分别返回不同的结果
+        up_result = MagicMock()
+        up_result.scalars.return_value.all.return_value = [up]
+        qa_result = MagicMock()
+        qa_result.scalars.return_value.all.return_value = []
+        mock_db.execute = AsyncMock(side_effect=[up_result, qa_result])
 
         with patch(
             "coursepilot.agent.context.build_course_context",
@@ -764,8 +766,8 @@ class TestAgentAPI:
         builder.add_edge("finalize", END)
         return builder.compile(checkpointer=MemorySaver())
 
-    def test_chat_returns_201(self, client, mock_graph, mock_asf):
-        """POST /agent/chat → 201 + ChatResponse 结构"""
+    def test_chat_returns_202(self, client, mock_graph, mock_asf):
+        """POST /agent/chat → 202 Accepted + session_id"""
         import coursepilot.api.agent as agent_mod
         saved = agent_mod._graph_app
         try:
@@ -799,13 +801,10 @@ class TestAgentAPI:
         finally:
             agent_mod._graph_app = saved
 
-        assert response.status_code == 201
+        assert response.status_code == 202
         data = response.json()
         assert "session_id" in data
-        assert data["intent"] == "question"
-        assert data["answer"] == "进程调度是操作系统的核心功能"
-        assert len(data["sources"]) > 0
-        assert isinstance(data["token_count"], int)
+        assert data["status"] == "processing"
 
     def test_chat_422_on_empty_message(self, client):
         """空消息 → 422"""

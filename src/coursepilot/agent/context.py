@@ -13,6 +13,23 @@ from coursepilot.rag.generator import build_course_context
 
 logger = logging.getLogger(__name__)
 
+
+def _first_profile(result, uid: str, cid: str) -> dict | None:
+    """安全获取 UserProfile 第一条，避免 duplicates 导致 MultipleResultsFound。"""
+    rows = result.scalars().all()
+    if not rows:
+        return None
+    if len(rows) > 1:
+        logger.warning("发现 %d 条 UserProfile 重复记录 user=%s course=%s，取第一条", len(rows), uid, cid)
+    p = rows[0]
+    return {
+        "mastery_level": p.mastery_level,
+        "weak_kps": p.weak_kps or [],
+        "avg_correct_rate": (
+            float(p.avg_correct_rate) if p.avg_correct_rate else None
+        ),
+    }
+
 async def build_context(
     session: AsyncSession,
     user_id: str,
@@ -25,7 +42,7 @@ async def build_context(
     # 1. 课程上下文（KP树大纲 + 教材名）
     course_ctx = await build_course_context(session, UUID(course_id))
 
-    # 2. 学生画像（若有与计算结果）
+    # 2. 学生画像（处理 duplicates 避免 MultipleResultsFound）
     profile = None
     result = await session.execute(
         select(UserProfile).where(
@@ -33,15 +50,7 @@ async def build_context(
             UserProfile.course_id == UUID(course_id)
         )
     )
-    up = result.scalar_one_or_none()
-    if up:
-        profile = {
-            "mastery_level": up.mastery_level,
-            "weak_kps": up.weak_kps or [],
-            "avg_correct_rate": (
-                float(up.avg_correct_rate) if up.avg_correct_rate else None
-            ),
-        }
+    profile = _first_profile(result, user_id, course_id)
 
     # 3. 最近 5 条问答（截断答案避免上下文膨胀）
     result = await session.execute(

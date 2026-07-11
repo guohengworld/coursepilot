@@ -110,8 +110,8 @@ class TestRoutingPhase2:
 
     def test_route_by_intent_practice_and_review(self):
         from coursepilot.agent.routing import route_by_intent
-        assert route_by_intent({"intent": "practice"}) == "human_review"
-        assert route_by_intent({"intent": "review"}) == "human_review"
+        assert route_by_intent({"intent": "practice"}) == "get_mastery"
+        assert route_by_intent({"intent": "review"}) == "get_mastery"
 
     def test_route_by_intent_diagnose(self):
         from coursepilot.agent.routing import route_by_intent
@@ -213,7 +213,7 @@ class TestGetMastery:
         up.avg_correct_rate = 0.65
 
         result = MagicMock()
-        result.scalar_one_or_none.return_value = up
+        result.scalars.return_value.all.return_value = [up]
         mock_db.execute = AsyncMock(return_value=result)
 
         from coursepilot.agent.skills.get_mastery import get_mastery
@@ -243,7 +243,7 @@ class TestGetMastery:
         up.avg_correct_rate = None
 
         result = MagicMock()
-        result.scalar_one_or_none.return_value = up
+        result.scalars.return_value.all.return_value = [up]
         mock_db.execute = AsyncMock(return_value=result)
 
         from coursepilot.agent.skills.get_mastery import get_mastery
@@ -781,10 +781,11 @@ class TestPhase2Nodes:
 
     @pytest.mark.asyncio
     async def test_diagnose_node(self, sample_state, mock_asf):
-        """diagnose_node 执行诊断"""
+        """diagnose_node 执行诊断 + LLM 分析"""
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
             patch("coursepilot.agent.nodes.diagnose") as mock_diag,
+            patch("coursepilot.agent.nodes.generate_llm_analysis") as mock_llm,
         ):
             mock_diag.return_value = {
                 "weak_kps": ["OS/进程同步"],
@@ -793,12 +794,16 @@ class TestPhase2Nodes:
                 "total_practiced": 5,
                 "overall_rate": 0.6,
             }
+            mock_llm.return_value = ("分析内容", "学习建议", {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30})
             from coursepilot.agent.nodes import diagnose_node
             result = await diagnose_node(sample_state)
 
         assert result["diagnosis"]["weak_kps"] == ["OS/进程同步"]
-        assert result["answer"] == "诊断摘要"
+        assert "诊断摘要" in result["answer"]
+        assert "分析内容" in result["answer"]
+        assert "学习建议" in result["answer"]
         assert result["error"] is None
+        assert result["llm_calls"][-1]["total_tokens"] == 30
 
     @pytest.mark.asyncio
     async def test_diagnose_node_error(self, sample_state, mock_asf):

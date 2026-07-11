@@ -77,14 +77,20 @@ async def _do_update(
         )
     )
 
-    # 3. Upsert
+    # 3. Upsert（处理 duplicates 避免 MultipleResultsFound）
     existing = await session.execute(
         select(UserProfile).where(
             UserProfile.user_id == UUID(user_id),
             UserProfile.course_id == UUID(course_id),
         )
     )
-    profile = existing.scalar_one_or_none()
+    profiles = existing.scalars().all()
+    if len(profiles) > 1:
+        logger.warning(
+            "profile_updater: %d 条 UserProfile 重复 user=%s course=%s，取第一条",
+            len(profiles), user_id, course_id,
+        )
+    profile = profiles[0] if profiles else None
 
     if profile:
         profile.mastery_level = mastery_level
