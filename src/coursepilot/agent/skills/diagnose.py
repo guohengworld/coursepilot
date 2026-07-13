@@ -185,8 +185,15 @@ DIAGNOSE_ANALYSIS_SYSTEM = """你是一个学情诊断分析专家。根据学�
 
 async def generate_llm_analysis(
     diagnosis: DiagnosisResult,
+    user_query: str = "",
+    topic_kp_path: str = "",
 ) -> tuple[str, str, dict]:
     """调用 LLM 生成深度学情分析和学习建议
+
+    Args:
+        diagnosis: 诊断结果
+        user_query: 用户原始查询（用于针对性分析）
+        topic_kp_path: 用户问到的特定知识点路径（若有）
 
     Returns:
         (analysis, recommendations, token_info)
@@ -210,6 +217,11 @@ async def generate_llm_analysis(
         "\n各知识点详情：",
         "\n".join(kp_lines),
     ]
+
+    # 如果用户问了特定知识点，添加到 prompt 顶部
+    if user_query:
+        prompt_parts.insert(0, f"学生的问题：{user_query}")
+        prompt_parts.insert(0, "请针对学生的具体问题进行针对性分析。如果学生问的知识点不在上述数据中，请如实告知尚无练习记录。")
 
     client = AsyncOpenAI(
         api_key=settings.llm_api_key,

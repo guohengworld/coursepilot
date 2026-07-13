@@ -17,9 +17,10 @@ export function deleteSession(sessionId: string) {
   return request<null>('DELETE', `/agent/sessions/${sessionId}`)
 }
 
-export function approveSession(sessionId: string) {
-  return request<{ status: string; session_id: string; answer: string }>(
+export function approveSession(sessionId: string, approved: boolean = true) {
+  return request<{ status: string; session_id: string; approved: boolean }>(
     'POST',
     `/agent/sessions/${sessionId}/approve`,
+    { approved },
   )
 }

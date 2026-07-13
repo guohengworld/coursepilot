@@ -7,6 +7,8 @@ import type { Course, SessionListItem } from '@/types'
 import type { ChatAcceptedResponse, SessionPollResponse, QuizQuestion, SubmitResponse, DiagnosisData } from '@/types'
 
 const route = useRoute()
+import { useAuthStore } from '@/stores/auth'
+const authStore = useAuthStore()
 const courses = ref<Course[]>([])
 const selectedCourseId = ref(route.query.courseId as string || '')
 const message = ref('')
@@ -213,10 +215,23 @@ async function handleSend() {
       return
     }
 
-    // 完成或失败
+    if (data.status === 'waiting_human') {
+      placeholder.content = '⏳ 等待教师审批中...\n会话已暂停，待教师确认后将自动继续'
+      return
+    }
+
+    // 终态：完成 / 拒绝 / 失败
     clearInterval(pollTimer!)
     pollTimer = null
     sending.value = false
+
+    if (data.status === 'rejected') {
+      placeholder.content = data.answer || '操作已被管理员拒绝'
+      placeholder.intent = data.intent
+      placeholder.sessionId = data.session_id
+      await loadSessions()
+      return
+    }
 
     if (data.status === 'failed') {
       placeholder.content = '错误: 处理失败，请重试'
@@ -292,6 +307,26 @@ async function handleDeleteSession(sessionId: string) {
     // 如果删除的是当前会话，清空
     if (activeSessionId.value === sessionId) {
       handleNewSession()
+    }
+  }
+}
+
+async function handleApprove(sessionId: string, approved: boolean) {
+  const res = await approveSession(sessionId, approved)
+  if (res.ok) {
+    await loadSessions()
+    // 如果是当前激活的会话且被拒绝，更新显示
+    if (activeSessionId.value === sessionId) {
+      const sr = await getSession(sessionId)
+      if (sr.ok) {
+        const data = sr.data as SessionPollResponse
+        if (data.status === 'rejected') {
+          const lastMsg = messages.value[messages.value.length - 1]
+          if (lastMsg && lastMsg.role === 'assistant') {
+            lastMsg.content = data.answer || '操作已被管理员拒绝'
+          }
+        }
+      }
     }
   }
 }
@@ -535,7 +570,15 @@ onMounted(() => {
       <!-- Session sidebar -->
       <div class="chat-sidebar">
         <el-card shadow="never">
-          <template #header><span>历史会话</span></template>
+          <template #header>
+            <span>历史会话</span>
+            <el-badge
+              v-if="authStore.isTeacher"
+              :value="sessionsList.filter(s => s.status === 'waiting_human').length"
+              :hidden="sessionsList.filter(s => s.status === 'waiting_human').length === 0"
+              class="pending-badge"
+            />
+          </template>
           <div v-if="sessionsList.length === 0" class="text-secondary">暂无会话</div>
           <div
             v-for="s in sessionsList"
@@ -549,10 +592,10 @@ onMounted(() => {
               </div>
               <div class="session-status">
                 <el-tag
-                  :type="s.status === 'completed' ? 'success' : (s.status === 'processing' || s.status === 'running') ? 'warning' : 'info'"
+                  :type="s.status === 'completed' ? 'success' : (s.status === 'processing' || s.status === 'running') ? 'warning' : s.status === 'waiting_human' ? 'info' : s.status === 'rejected' ? 'danger' : 'info'"
                   size="small"
                 >
-                  {{ s.status }}
+                  {{ s.status === 'waiting_human' ? '等待审批' : s.status === 'rejected' ? '已拒绝' : s.status }}
                 </el-tag>
               </div>
               <el-button
@@ -568,6 +611,19 @@ onMounted(() => {
             </div>
             <div class="session-query text-secondary" :title="s.query || ''">
               {{ s.query || '（无提问）' }}
+            </div>
+            <!-- 教师审批按钮 -->
+            <div
+              v-if="s.status === 'waiting_human' && authStore.isTeacher"
+              class="session-approve-actions"
+              @click.stop
+            >
+              <el-button size="small" type="success" @click="handleApprove(s.session_id, true)">
+                批准
+              </el-button>
+              <el-button size="small" type="danger" @click="handleApprove(s.session_id, false)">
+                拒绝
+              </el-button>
             </div>
           </div>
         </el-card>
@@ -690,6 +746,16 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 100%;
+}
+
+.session-approve-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.pending-badge {
+  margin-left: 4px;
 }
 
 /* Quiz 交互区域 */

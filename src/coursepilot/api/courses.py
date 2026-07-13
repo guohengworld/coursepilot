@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from coursepilot.api.deps import get_current_user, require_superuser
+from coursepilot.api.deps import get_current_user, require_teacher, require_superuser
 from coursepilot.db import get_session
 from coursepilot.models import Course, Document, KnowledgePoint, KnowledgeUnit, User
 from coursepilot.rag.vector_store import VectorStore
@@ -91,7 +91,7 @@ async def list_courses(
 async def create_course(
     body: CourseCreate,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(require_superuser),
+    user: User = Depends(require_teacher),
 ) -> CourseOut:
     """创建课程"""
     course = Course(
@@ -155,7 +155,7 @@ async def upload_file(
     file: UploadFile = File(...),
     course_id: UUID = Form(...),
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(require_superuser),
+    user: User = Depends(require_teacher),
 ) -> dict:
     """上传课程资料并触发 ingestion
 

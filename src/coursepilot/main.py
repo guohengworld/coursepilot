@@ -4,6 +4,13 @@
     uvicorn coursepilot.main:app --reload
 """
 import os
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
 # 必须在任何 PyTorch 导入之前设置，防止 CUDA 内存碎片化
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 

@@ -16,16 +16,12 @@ def route_by_intent(state: dict) -> str:
         "query_rag"    — question / code_help（默认 RAG 问答）
     """
     intent = state.get("intent", "")
-    if intent == "question":
-        return "query_rag"
-    elif intent == "practice":
-        return "get_mastery"
-    elif intent == "review":
-        return "get_mastery"
+    if intent in ("practice", "review"):
+        return "human_review"      # 需要教师审批
     elif intent == "diagnose":
-        return "diagnose"
-    elif intent == "code_help":
-        return "query_rag"
+        return "diagnose"          # 诊断只读，无需审批
+    elif intent in ("question", "code_help"):
+        return "query_rag"         # 问答/代码直接执行
     return "query_rag"
 
 

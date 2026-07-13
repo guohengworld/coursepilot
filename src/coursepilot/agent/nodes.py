@@ -299,6 +299,7 @@ async def diagnose_node(state: dict) -> dict:
     """学情诊断 → state["diagnosis"] + state["answer"]
 
     调用聚合统计 + LLM 分析，组合为完整诊断报告。
+    如果用户查询了特定知识点（如"二重积分"），自动过滤到该子树。
     持久化由 finalize_node 统一处理。
     """
     try:
@@ -309,6 +310,39 @@ async def diagnose_node(state: dict) -> dict:
                 course_id=state["course_id"],
             )
 
+            # 从用户查询中提取特定知识点
+            query = state.get("query", "")
+            topic_kp_path = await _find_topic_kp(
+                session, state["course_id"], query,
+            ) if query else ""
+
+        # 找到了特定知识点，过滤统计到该子树
+        if topic_kp_path and diagnosis["total_practiced"] > 0:
+            filtered = {
+                kp: stat for kp, stat in diagnosis["kp_stats"].items()
+                if kp == topic_kp_path or kp.startswith(topic_kp_path + "/")
+            }
+            if filtered:
+                diagnosis["kp_stats"] = filtered
+                diagnosis["weak_kps"] = [
+                    kp for kp in diagnosis["weak_kps"] if kp in filtered
+                ]
+                total_correct = sum(s["correct"] for s in filtered.values())
+                total_count = sum(s["total"] for s in filtered.values())
+                diagnosis["overall_rate"] = total_correct / total_count if total_count else 0.0
+                diagnosis["total_practiced"] = total_count
+            else:
+                topic_name = topic_kp_path.rsplit("/", 1)[-1]
+                answer = (
+                    f"你还没有练习过「{topic_name}」相关的题目"
+                    f"（知识点路径：{topic_kp_path}），"
+                    f"暂时无法针对这个知识点进行学情诊断。"
+                    f"先做一些相关练习题吧！"
+                )
+                diagnosis["llm_analysis"] = ""
+                diagnosis["recommendations"] = ""
+                return {"diagnosis": diagnosis, "answer": answer, "error": None}
+
         # 无练习记录时跳过 LLM
         if diagnosis["total_practiced"] == 0:
             answer = "暂无练习记录，请先做一些练习题再来进行学情诊断。"
@@ -316,13 +350,17 @@ async def diagnose_node(state: dict) -> dict:
             diagnosis["recommendations"] = ""
             return {"diagnosis": diagnosis, "answer": answer, "error": None}
 
-        # LLM 深度分析
-        analysis, recommendations, token_info = await generate_llm_analysis(diagnosis)
+        # LLM 深度分析（传用户查询，让分析更有针对性）
+        analysis, recommendations, token_info = await generate_llm_analysis(
+            diagnosis, user_query=query, topic_kp_path=topic_kp_path,
+        )
         llm_calls = list(state.get("llm_calls", []))
         llm_calls.append({"node": "diagnose", **token_info})
 
         # 组合回答文本
         answer_parts = [diagnosis.get("summary", "")]
+        if topic_kp_path:
+            answer_parts.insert(0, f"针对知识点「{topic_kp_path}」的分析：")
         if analysis:
             answer_parts.append(f"\n📊 深度分析\n{analysis}")
         if recommendations:
@@ -342,15 +380,68 @@ async def diagnose_node(state: dict) -> dict:
         logger.exception("diagnose_node 异常")
         return {"diagnosis": {}, "answer": "诊断失败，请稍后再试", "error": str(e)}
 
+
+async def _find_topic_kp(session: AsyncSession, course_id: str, query: str) -> str:
+    """从用户查询中提取匹配的知识点路径
+
+    先用完整查询搜索 kp_path/title，未命中则去掉疑问词再试。
+    返回最长匹配的 kp_path，未找到返回空字符串。
+    """
+    from sqlalchemy import or_
+    from coursepilot.models import KnowledgePoint
+
+    candidates = [
+        query.strip(),
+    ]
+    # 加上去掉常见疑问词的版本
+    simplified = query.replace("怎么样", "").replace("如何", "").replace(
+        "什么", ""
+    ).replace("怎么", "").replace("吗", "").strip()
+    if simplified and simplified != query:
+        candidates.append(simplified)
+
+    for text in candidates:
+        if not text:
+            continue
+        result = await session.execute(
+            select(KnowledgePoint).where(
+                KnowledgePoint.course_id == UUID(course_id),
+                or_(
+                    KnowledgePoint.title.ilike(f"%{text}%"),
+                    KnowledgePoint.kp_path.ilike(f"%{text}%"),
+                ),
+            ).limit(5)
+        )
+        kps = result.scalars().all()
+        if kps:
+            kps.sort(key=lambda kp: len(kp.kp_path), reverse=True)
+            return kps[0].kp_path
+
+    return ""
+
 async def review_plan_node(state: dict) -> dict:
-    """生成复习计划 → state["review_plan"] + state["answer"]"""
+    """生成复习计划 → state["review_plan"] + state["answer"]
+
+    注意：review 路径不经 diagnose_node，所以 state["diagnosis"] 可能为空。
+    此处自动调用 diagnose() 确保有数据。
+    """
     try:
         async with async_session_factory() as session:
+            diagnosis = state.get("diagnosis", {})
+            if not diagnosis.get("kp_stats"):
+                # review 路径没经过 diagnose，实时查
+                from coursepilot.agent.skills.diagnose import diagnose as _diagnose
+                diagnosis = await _diagnose(
+                    session=session,
+                    user_id=state["user_id"],
+                    course_id=state["course_id"],
+                )
+
             plan_data, token_info = await review_plan(
                 session=session,
                 user_id=state["user_id"],
                 course_id=state["course_id"],
-                diagnosis=state.get("diagnosis", {})
+                diagnosis=diagnosis,
             )
         answer = plan_data.get("plan_summary", "")
         llm_calls = list(state.get("llm_calls", []))
