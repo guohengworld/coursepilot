@@ -45,12 +45,14 @@ GRID_STAGES = {
     1: {"rrf_k": [30, 60, 90, 120]},
     2: {"rerank_top_k": [3, 5, 8, 10]},
     3: {"context_max_chars": [4000, 6000, 8000, 10000, 12000]},
+    4: {"rrf_weights": [[1.0, 1.0], [1.5, 1.0], [1.0, 1.5], [2.0, 1.0], [1.0, 2.0]]},
 }
 
 STAGE_NAMES = {
     1: "rrf_k",
     2: "rerank_top_k",
     3: "context_max_chars",
+    4: "rrf_weights",
 }
 
 

@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.models import Course, Document, KnowledgePoint, KnowledgeUnit
+from coursepilot.rag.bm25 import BM25Indexer
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +240,8 @@ async def run_ingestion(
 
         doc.status = "ready"
         doc.page_count = len(units)
+        # ingestion 完成后清除 BM25 缓存，下次检索时自动重建
+        BM25Indexer.invalidate(str(doc.course_id))
         await session.flush()
         logger.info(f"Document {doc.filename} ingestion complete: {len(units)} units")
 

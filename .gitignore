@@ -11,6 +11,14 @@ build/
 .ruff_cache/
 .mypy_cache/
 .idea/
+.workbuddy/
+.agents/
+Logs/
+parsed/
+src/coursepilot/parsed/
+frontend/.vscode/
+frontend/README.md
+docs/*.pdf
 eval/reports/
 tests/fixtures/pdfs/
 tests/fixtures/exported_units.json

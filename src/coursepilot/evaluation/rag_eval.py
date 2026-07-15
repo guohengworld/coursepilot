@@ -98,6 +98,7 @@ class EvalResult:
     context_precision: float = 0.0
     faithfulness: float = 0.0
     answer_relevancy: float = 0.0
+    context_length: int = 0
 
     query_rewritten: str = ""
     top_kp_paths: list[str] = field(default_factory=list)
@@ -132,6 +133,10 @@ class EvalReport:
     @property
     def avg_answer_relevancy(self) -> float:
         return _safe_mean(r.answer_relevancy for r in self.results)
+
+    @property
+    def avg_context_length(self) -> float:
+        return _safe_mean(r.context_length for r in self.results)
 
     @property
     def error_count(self) -> int:
@@ -181,6 +186,7 @@ class EvalReport:
                 "context_precision": self.avg_context_precision,
                 "faithfulness": self.avg_faithfulness,
                 "answer_relevancy": self.avg_answer_relevancy,
+                "context_length": self.avg_context_length,
             },
             "results": [
                 {
@@ -191,6 +197,7 @@ class EvalReport:
                     "context_precision": r.context_precision,
                     "faithfulness": r.faithfulness,
                     "answer_relevancy": r.answer_relevancy,
+                    "context_length": r.context_length,
                     "latency_ms": r.latency_ms,
                     "error": r.error,
                 }
@@ -251,23 +258,15 @@ class RAGEvaluator:
     ) -> tuple[str, dict, list[str]]:
         """执行检索并返回 (context, metadata, all_retrieved_uuids)
 
-        all_retrieved_uuids 包含 KP 扩展后最终上下文中的全部 unit UUID，
-        用于与 ground_truth_contexts 对比计算 Context Recall。
+        all_retrieved_uuids 取 metadata 中的 context_uuids（精准反映最终上下文内容），
+        不再回查 DB 中对应 KP 下的全部 unit，确保 baseline / kp_full / kp_neighbor
+        三种策略的 recall 计算准确可比。
         """
         context, metadata = await self.retriever.retrieve(
             session, query, course_id
         )
 
-        # 收集 KP 扩展后的全部 UUID
-        top_kp_ids = metadata.get("top_kp_ids", [])
-        all_uuids: list[str] = []
-        if top_kp_ids:
-            result = await session.execute(
-                select(KnowledgeUnit.id)
-                .where(KnowledgeUnit.kp_id.in_([UUID(k) for k in top_kp_ids]))
-            )
-            all_uuids = [str(r[0]) for r in result.all()]
-
+        all_uuids = metadata.get("context_uuids", [])
         return context, metadata, all_uuids
 
     # ── 单题评估 ──────────────────────────────────────────────
@@ -304,10 +303,11 @@ class RAGEvaluator:
             result.top_kp_paths = metadata.get("source_kp_paths", [])
             result.candidate_count = metadata.get("candidate_count", 0)
 
-            # 2) Context Recall（确定性）
+            # 2) Context Recall（确定性）+ 上下文长度
             result.context_recall = self._compute_context_recall(
                 gt_uuids, all_uuids
             )
+            result.context_length = len(context)
 
             # 3) 生成回答（可选跳过，仅评估检索质量时）
             if not skip_generation and context:
@@ -322,21 +322,26 @@ class RAGEvaluator:
                 result.answer = ""
                 result.error = "检索上下文为空"
 
-            # 4) LLM-as-Judge 指标（有回答时才计算）
-            if result.answer and context:
-                print("[eval] LLM-as-Judge 评估开始...")
+            # 4) LLM-as-Judge 指标
+            #    Context Precision 无需生成回答，独立计算（支持 skip_generation 场景）
+            top_kp_ids = metadata.get("top_kp_ids", [])
+            if top_kp_ids and context:
+                print("[eval] LLM-as-Judge Context Precision 评估开始...")
                 t_judge = time.monotonic()
-                top_kp_ids = metadata.get("top_kp_ids", [])
                 result.context_precision = await self._judge_context_precision(
                     question["question"], top_kp_ids, session
                 )
+                print(f"[eval] Context Precision 完成, 耗时={(time.monotonic()-t_judge)*1000:.0f}ms")
+            #    Faithfulness & Answer Relevancy 依赖生成
+            if result.answer and context:
+                t_judge2 = time.monotonic()
                 result.faithfulness = await self._judge_faithfulness(
                     result.answer, context
                 )
                 result.answer_relevancy = await self._judge_answer_relevancy(
                     question["question"], result.answer
                 )
-                print(f"[eval] LLM-as-Judge 完成, 耗时={(time.monotonic()-t_judge)*1000:.0f}ms")
+                print(f"[eval] Faithfulness+Relevancy 完成, 耗时={(time.monotonic()-t_judge2)*1000:.0f}ms")
 
         except Exception as e:
             result.error = str(e)
@@ -527,6 +532,7 @@ class RAGEvaluator:
         """当前 RAG 配置快照（便于报告记录）"""
         return {
             "rrf_k": rag_config.rrf_k,
+            "rrf_weights": list(getattr(rag_config, "rrf_weights", [1.0, 1.0])),
             "rerank_top_k": rag_config.rerank_top_k,
             "context_max_chars": rag_config.context_max_chars,
             "dense_top_k": rag_config.dense_top_k,
@@ -535,6 +541,8 @@ class RAGEvaluator:
             "enable_sparse": rag_config.enable_sparse,
             "enable_rerank": rag_config.enable_rerank,
             "enable_kp_expand": rag_config.enable_kp_expand,
+            "kp_expand_mode": getattr(rag_config, "kp_expand_mode", "full"),
+            "kp_neighbor_window": getattr(rag_config, "kp_neighbor_window", 2),
         }
 
 

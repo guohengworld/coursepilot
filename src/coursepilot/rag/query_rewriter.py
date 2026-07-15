@@ -68,6 +68,9 @@ class QueryRewriter:
                 max_tokens=200,
             )
             rewritten = response.choices[0].message.content.strip()
+            if not rewritten:
+                logger.warning("改写返回空串，降级使用原 query: %s", query)
+                return query
             print(f"[rewrite] 完成: '{query[:40]}...' → '{rewritten[:40]}...'")
             logger.debug("查询改写：'%s' → '%s'", query, rewritten)
             return rewritten
