@@ -61,6 +61,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/ApiConsole.vue'),
     meta: { requiresAuth: false },
   },
+  {
+    path: '/admin/memory',
+    name: 'AdminMemoryConsole',
+    component: () => import('@/views/AdminMemoryConsole.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true },
+  },
 ]
 
 const router = createRouter({
@@ -78,6 +84,11 @@ router.beforeEach((to, _from, next) => {
 
   if (!auth.isLoggedIn) {
     next({ name: 'Login', query: { redirect: to.fullPath } })
+    return
+  }
+
+  if (to.meta.requiresAdmin && !auth.isSuperuser) {
+    next({ name: 'Dashboard' })
     return
   }
 

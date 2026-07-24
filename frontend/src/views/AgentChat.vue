@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, reactive } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { getCourses, chat, getSession, listSessions, approveSession, deleteSession } from '@/api'
 import { getQuiz, submitAnswers } from '@/api/practice'
@@ -31,8 +31,106 @@ interface Message {
 const messages = ref<Message[]>([])
 const activeSessionId = ref<string | null>(null)
 const sessionsList = ref<SessionListItem[]>([])
+const sessionsLoading = ref(false)
 const submittingMap = reactive<Record<string, boolean>>({})
 let pollTimer: ReturnType<typeof setInterval> | null = null
+const chatMessagesRef = ref<HTMLElement | null>(null)
+
+function scrollToBottom() {
+  nextTick(() => {
+    if (chatMessagesRef.value) {
+      chatMessagesRef.value.scrollTop = chatMessagesRef.value.scrollHeight
+    }
+  })
+}
+
+function startPolling(sessionId: string, placeholder: Message) {
+  if (pollTimer) clearInterval(pollTimer)
+  let pollCount = 0
+  const MAX_POLL = 120
+  pollTimer = setInterval(async () => {
+    pollCount++
+    if (pollCount > MAX_POLL) {
+      clearInterval(pollTimer!)
+      pollTimer = null
+      placeholder.content = '错误: 处理超时，请重试'
+      sending.value = false
+      scrollToBottom()
+      return
+    }
+
+    const sr = await getSession(sessionId)
+    if (!sr.ok) {
+      clearInterval(pollTimer!)
+      pollTimer = null
+      const detail = (sr.data as any)?.detail || '查询失败'
+      // 如果会话被删除（404），统一显示友好提示
+      if (detail === '会话不存在') {
+        placeholder.content = '会话已停止（已被删除）'
+      } else {
+        placeholder.content = `错误: ${detail}`
+      }
+      sending.value = false
+      scrollToBottom()
+      return
+    }
+
+    const data = sr.data as SessionPollResponse
+
+    if (data.status === 'processing') {
+      placeholder.content = '正在处理' + '.'.repeat(pollCount % 4)
+      return
+    }
+
+    if (data.status === 'waiting_human') {
+      placeholder.content = '⏳ 等待教师审批中...\n会话已暂停，待教师确认后将自动继续'
+      return
+    }
+
+    // 终态：完成 / 拒绝 / 失败
+    clearInterval(pollTimer!)
+    pollTimer = null
+    sending.value = false
+
+    if (data.status === 'rejected') {
+      placeholder.content = data.answer || '操作已被管理员拒绝'
+      placeholder.intent = data.intent
+      placeholder.sessionId = data.session_id
+      await loadSessions()
+      scrollToBottom()
+      return
+    }
+
+    if (data.status === 'failed') {
+      placeholder.content = '错误: 处理失败，请重试'
+      scrollToBottom()
+      return
+    }
+
+    // status === 'completed'
+    placeholder.content = data.answer || ''
+    placeholder.intent = data.intent
+    placeholder.sources = data.sources || undefined
+    placeholder.sessionId = data.session_id
+
+    // 练习：从轮询结果加载题目
+    if (data.intent === 'practice' && data.questions) {
+      placeholder.quiz = data.questions
+      data.questions.forEach((_, qi) => {
+        placeholder.answers[String(qi)] = ''
+      })
+    }
+
+    // 诊断：加载结构化数据
+    if (data.intent === 'diagnose' && data.diagnosis_data) {
+      placeholder.diagnosis = data.diagnosis_data
+    }
+
+    // 刷新会话列表
+    await loadSessions()
+    scrollToBottom()
+  }, 1000)
+}
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
@@ -46,10 +144,12 @@ async function loadCourses() {
 }
 
 async function loadSessions() {
+  sessionsLoading.value = true
   const res = await listSessions()
   if (res.ok && Array.isArray(res.data)) {
     sessionsList.value = res.data as SessionListItem[]
   }
+  sessionsLoading.value = false
 }
 
 function handleNewSession() {
@@ -139,6 +239,22 @@ async function selectSession(sessionId: string) {
 
   messages.value = msgs
   activeSessionId.value = sessionId
+
+  // 若会话仍在处理中，添加占位消息并继续轮询
+  if (data.status === 'processing' || data.status === 'waiting_human') {
+    const placeholder: Message = {
+      role: 'assistant',
+      content: data.status === 'waiting_human' ? '⏳ 等待教师审批中...\n会话已暂停，待教师确认后将自动继续' : '正在处理...',
+      answers: {},
+      submitted: false,
+    }
+    msgs.push(placeholder)
+    messages.value = msgs
+    startPolling(sessionId, placeholder)
+  }
+
+  // 滚动到底部
+  scrollToBottom()
 }
 
 async function handleSend() {
@@ -186,80 +302,8 @@ async function handleSend() {
   }
   msgs.push(placeholder)
 
-  // 轮询结果
-  let pollCount = 0
-  const MAX_POLL = 120
-  pollTimer = setInterval(async () => {
-    pollCount++
-    if (pollCount > MAX_POLL) {
-      clearInterval(pollTimer!)
-      pollTimer = null
-      placeholder.content = '错误: 处理超时，请重试'
-      sending.value = false
-      return
-    }
-
-    const sr = await getSession(sessionId)
-    if (!sr.ok) {
-      clearInterval(pollTimer!)
-      pollTimer = null
-      placeholder.content = `错误: ${(sr.data as any)?.detail || '查询失败'}`
-      sending.value = false
-      return
-    }
-
-    const data = sr.data as SessionPollResponse
-
-    if (data.status === 'processing') {
-      placeholder.content = '正在处理' + '.'.repeat(pollCount % 4)
-      return
-    }
-
-    if (data.status === 'waiting_human') {
-      placeholder.content = '⏳ 等待教师审批中...\n会话已暂停，待教师确认后将自动继续'
-      return
-    }
-
-    // 终态：完成 / 拒绝 / 失败
-    clearInterval(pollTimer!)
-    pollTimer = null
-    sending.value = false
-
-    if (data.status === 'rejected') {
-      placeholder.content = data.answer || '操作已被管理员拒绝'
-      placeholder.intent = data.intent
-      placeholder.sessionId = data.session_id
-      await loadSessions()
-      return
-    }
-
-    if (data.status === 'failed') {
-      placeholder.content = '错误: 处理失败，请重试'
-      return
-    }
-
-    // status === 'completed'
-    placeholder.content = data.answer || ''
-    placeholder.intent = data.intent
-    placeholder.sources = data.sources || undefined
-    placeholder.sessionId = data.session_id
-
-    // 练习：从轮询结果加载题目
-    if (data.intent === 'practice' && data.questions) {
-      placeholder.quiz = data.questions
-      data.questions.forEach((_, qi) => {
-        placeholder.answers[String(qi)] = ''
-      })
-    }
-
-    // 诊断：加载结构化数据
-    if (data.intent === 'diagnose' && data.diagnosis_data) {
-      placeholder.diagnosis = data.diagnosis_data
-    }
-
-    // 刷新会话列表
-    await loadSessions()
-  }, 1000)
+  // 使用共享的轮询逻辑
+  startPolling(sessionId, placeholder)
 }
 
 async function loadQuiz(sessionId: string, msg: Message) {
@@ -365,7 +409,7 @@ onMounted(() => {
         </el-card>
 
         <el-card class="chat-messages-card" shadow="never">
-          <div class="chat-messages" v-if="messages.length > 0">
+          <div class="chat-messages" ref="chatMessagesRef" v-if="messages.length > 0">
             <div
               v-for="(msg, i) in messages"
               :key="i"
@@ -550,7 +594,7 @@ onMounted(() => {
               v-model="message"
               type="textarea"
               :rows="2"
-              placeholder="输入消息..."
+              placeholder="输入消息... (Ctrl+Enter 发送)"
               :disabled="sending"
               @keydown.ctrl.enter="handleSend"
             />
@@ -579,7 +623,12 @@ onMounted(() => {
               class="pending-badge"
             />
           </template>
-          <div v-if="sessionsList.length === 0" class="text-secondary">暂无会话</div>
+          <div v-if="sessionsLoading" class="text-secondary" style="text-align: center; padding: 12px 0;">
+            加载中...
+          </div>
+          <div v-else-if="sessionsList.length === 0" class="text-secondary" style="text-align: center; padding: 12px 0;">
+            暂无会话
+          </div>
           <div
             v-for="s in sessionsList"
             :key="s.session_id"
@@ -663,6 +712,20 @@ onMounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 8px 0;
+  scroll-behavior: smooth;
+}
+
+.chat-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-messages::-webkit-scrollbar-thumb {
+  background: var(--el-border-color-darker);
+  border-radius: 3px;
 }
 
 .message-bubble {

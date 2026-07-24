@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 
 const menuItems = [
   { path: '/dashboard', icon: 'Odometer', label: '仪表盘' },
@@ -12,6 +14,7 @@ const menuItems = [
   { path: '/rag-qa', icon: 'ChatLineSquare', label: 'RAG 问答' },
   { path: '/agent', icon: 'MagicStick', label: 'Agent 对话' },
   { path: '/api-console', icon: 'Tools', label: 'API 控制台' },
+  ...(auth.isSuperuser ? [{ path: '/admin/memory', icon: 'Cpu', label: '记忆层控制台' }] : []),
 ]
 
 const activeIndex = computed(() => {
