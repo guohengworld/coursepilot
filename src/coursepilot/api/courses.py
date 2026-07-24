@@ -3,14 +3,23 @@
 import time
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from coursepilot.api.deps import get_current_user, require_teacher, require_superuser
-from coursepilot.db import get_session
-from coursepilot.models import Course, Document, KnowledgePoint, KnowledgeUnit, User
+from coursepilot.api.deps import get_current_user, require_superuser, require_teacher
+from coursepilot.db import async_session_factory, get_session
+from coursepilot.models import Course, Document, KnowledgePoint, KnowledgeUnit, User, UserProfile
 from coursepilot.rag.vector_store import VectorStore
 from coursepilot.storage.file_store import FileStore
 
@@ -141,6 +150,11 @@ async def delete_course(
     # 先删文件
     file_store.delete_course_files(str(course.id))
 
+    # 先清理关联的学生画像记录，避免外键约束冲突
+    await session.execute(
+        UserProfile.__table__.delete().where(UserProfile.course_id == course.id)
+    )
+
     await session.delete(course)
     await session.flush()
     return {"deleted": "True"}
@@ -149,18 +163,43 @@ async def delete_course(
 # ========== 文件上传与资料管理 ===========
 
 
+async def _run_ingestion_background(document_id: str) -> None:
+    """后台任务：在独立 session 中运行 ingestion pipeline。"""
+    from coursepilot.ingestion.pipeline import run_ingestion
+
+    async with async_session_factory() as session:
+        try:
+            await run_ingestion(session, document_id)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            # 尝试记录失败状态
+            try:
+                async with async_session_factory() as session2:
+                    doc = await session2.get(Document, UUID(document_id))
+                    if doc:
+                        doc.status = "failed"
+                        doc.error_message = "后台 ingestion 异常"
+                        await session2.commit()
+            except Exception:
+                pass
+            raise
+
+
 # 状态码202：请求已接受，但未立即完成。
 @router.post("/upload", status_code=202)
 async def upload_file(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     course_id: UUID = Form(...),
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_teacher),
 ) -> dict:
-    """上传课程资料并触发 ingestion
+    """上传课程资料并触发 ingestion（后台异步执行）。
 
     支持格式：pdf，docx，md
-    文件保存到本地后，异步触发 ingestion pipeline
+    文件保存到本地后，立即返回 202，ingestion 在后台执行。
+    前端可通过 GET /courses/{course_id}/documents 轮询状态。
     """
     # 1. 校验格式
     filename = file.filename or "unknown"
@@ -192,21 +231,15 @@ async def upload_file(
     await session.flush()
     await session.refresh(doc)
 
-    # 5. 返回 202，ingestion 在后台执行
-    #    注意：MVP 阶段先同步执行（简单可靠），后续可改为 BackgroundTasks
-    try:
-        from coursepilot.ingestion.pipeline import run_ingestion
+    # 5. 提交当前事务，确保 Document 记录落库，后台任务可读取
+    await session.commit()
 
-        await run_ingestion(session, str(doc.id))
-    except Exception as exc:
-        doc.status = "failed"
-        doc.error_message = str(exc)
-        await session.flush()
-        # 不抛异常，让 upload 请求正常返回，用户可在 documents 列表中看到 failed 状态
+    # 6. 后台异步执行 ingestion
+    background_tasks.add_task(_run_ingestion_background, str(doc.id))
 
     return {
         "document_id": str(doc.id),
-        "status": doc.status,
+        "status": "processing",
         "filename": filename,
     }
 

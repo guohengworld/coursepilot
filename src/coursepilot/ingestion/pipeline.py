@@ -1,4 +1,4 @@
-"""Ingestion 管线：解析文件 → 自动构建 KP 树 → 切分 → KP 分配 → 摘要 → 入库
+"""Ingestion 管线：解析文件 → 自动构建 KP 树 → 切分 → KP 分配 → 规则摘要 → 入库
 
 流程：
   Document(status=pending)
@@ -6,7 +6,7 @@
     → _ensure_kp_tree 从标题自动构建/合并知识点树（新增：无需手动预建 KP）
     → extract_knowledge_units 切分（垃圾过滤 + heading 追踪 + 数学块感知）
     → KPSplitter 分配到知识点
-    → SummaryBridge 生成摘要
+    → 规则摘要生成（无 LLM 调用，避免 LaTeX 公式与 API 耗时）
     → encode_units → Milvus
     → Document（status=ready）
 """
@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import time
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -23,6 +25,77 @@ from coursepilot.models import Course, Document, KnowledgePoint, KnowledgeUnit
 from coursepilot.rag.bm25 import BM25Indexer
 
 logger = logging.getLogger(__name__)
+
+# LaTeX 公式占位：避免摘要里堆满 $$...$$，保留可读性
+_MATH_BLOCK_RE = re.compile(r"\$\$[\s\S]*?\$\$")
+_MATH_INLINE_RE = re.compile(r"\$[^\$\n]+?\$")
+
+
+def _strip_latex(text: str) -> str:
+    """将 LaTeX 公式替换为占位符，使摘要保持自然语言可读。"""
+    text = _MATH_BLOCK_RE.sub(" [公式] ", text)
+    text = _MATH_INLINE_RE.sub(" [公式] ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _make_rule_summary(unit: dict, max_len: int = 80) -> str:
+    """为 KnowledgeUnit 生成规则摘要（不调用 LLM）。
+
+    策略：
+      1. 优先使用 heading 信息
+      2. 取首句自然语言（避开公式）
+      3. 若内容以公式为主，则生成"公式推导：..."
+    """
+    content = unit.get("content", "")
+    meta = unit.get("meta_data", {}) or {}
+    heading = meta.get("heading", "").strip()
+
+    # 清理内容中的 LaTeX，便于提取自然语言
+    clean = _strip_latex(content)
+
+    # 1. 有 heading 且 heading 不是默认"未知章节"，直接以 heading 作为摘要主干
+    if heading and heading != "未知章节":
+        # 如果内容很短，直接返回 heading
+        if len(clean) <= max_len * 2:
+            return heading[:max_len]
+        # 否则尝试拼接首句
+        first = _extract_first_sentence(clean, max_len)
+        candidate = f"{heading}：{first}"
+        if len(candidate) <= max_len + 10:
+            return candidate[:max_len]
+        return heading[:max_len]
+
+    # 2. 无 heading，取首句
+    first = _extract_first_sentence(clean, max_len)
+    if first:
+        return first
+
+    # 3. 全是公式，生成兜底摘要
+    if "$" in content:
+        return "公式推导与运算"
+
+    # 4. 兜底
+    return clean[:max_len] if clean else "教材内容"
+
+
+def _extract_first_sentence(text: str, max_len: int) -> str:
+    """从文本中提取第一句自然语言（按句号/问号/感叹号/换行分隔）。"""
+    # 先按换行分，取第一个有意义的段落
+    for para in text.split("\n"):
+        para = para.strip()
+        if not para:
+            continue
+        # 再按句末标点切分
+        m = re.search(r"^.+?[。！？\.\?\!]", para)
+        if m:
+            sent = m.group(0).strip()
+        else:
+            sent = para
+        # 过滤纯公式占位/空
+        sent = sent.replace("[公式]", "").strip()
+        if sent:
+            return sent[:max_len]
+    return ""
 
 
 async def _ensure_kp_tree(
@@ -145,10 +218,15 @@ async def run_ingestion(
     doc.status = "processing"
     await session.flush()
 
+    # 全流程计时
+    timings: dict[str, float] = {}
+    t_total = time.monotonic()
+
     try:
         # ── B0: 解析文件 → content_list ──────────────────
         if preparsed_content_list is not None:
             content_list = preparsed_content_list
+            timings["parse"] = 0.0
         else:
             file_path = doc.file_path
             ext = doc.file_type
@@ -156,23 +234,38 @@ async def run_ingestion(
             if ext == "pdf":
                 from coursepilot.ingestion.pdf_parser import parse_pdf
 
+                t0 = time.monotonic()
                 result = await parse_pdf(
                     file_path,
                     start_page=start_page,
                     end_page=end_page,
                 )
+                timings["parse"] = round(time.monotonic() - t0, 2)
             elif ext == "docx":
                 from coursepilot.ingestion.docx_parser import parse_docx
 
+                t0 = time.monotonic()
                 result = parse_docx(file_path)
+                timings["parse"] = round(time.monotonic() - t0, 2)
             elif ext == "md":
                 from coursepilot.ingestion.markdown_parser import parse_markdown
 
+                t0 = time.monotonic()
                 result = parse_markdown(file_path)
+                timings["parse"] = round(time.monotonic() - t0, 2)
             else:
                 raise ValueError(f"不支持的文件格式: .{ext}")
 
             content_list = result.get("content_list", [])
+            parse_config = result.get("_config", {})
+            parse_timings = result.get("_timings", {})
+            logger.info(
+                "B0: %s 解析完成，类型=%s, 耗时=%.2fs, MinerU细节=%s",
+                ext,
+                parse_config.get("backend", "unknown"),
+                timings["parse"],
+                parse_timings,
+            )
 
         if not content_list:
             raise ValueError("解析结果为空")
@@ -208,13 +301,13 @@ async def run_ingestion(
             units = splitter.assign(units)
         logger.info("B3: KP 分配完成")
 
-        # ── B4: SummaryBridge 生成摘要（阶段 A 新增） ────
-        from coursepilot.rag.summary_bridge import SummaryBridge
-
-        logger.info("B6: 开始生成摘要（%d 个 unit）...", len(units))
-        bridge = SummaryBridge()
-        units = await bridge.run(units)
-        logger.info("B6: 摘要生成完成")
+        # ── B4: 规则摘要生成（替换 LLM SummaryBridge）────
+        logger.info("B4: 开始规则摘要（%d 个 unit）...", len(units))
+        t0 = time.monotonic()
+        for u in units:
+            u["summary"] = _make_rule_summary(u)
+        timings["summary"] = round(time.monotonic() - t0, 2)
+        logger.info("B4: 规则摘要完成，耗时=%.2fs", timings["summary"])
 
         # 回填 kp_path 到 units（Milvus 入库需要）
         kp_map = {n["id"]: n["kp_path"] for n in kp_nodes}
@@ -222,9 +315,12 @@ async def run_ingestion(
             u["kp_path"] = kp_map.get(u.get("kp_id", ""), "")
 
         # ── B5: encode + Milvus insert（阶段 B 实施） ────
+        t0 = time.monotonic()
         await _encode_units(units, str(doc.course_id), str(doc.id))
+        timings["encode"] = round(time.monotonic() - t0, 2)
 
         # ── B6: 批量插入 knowledge_units ─────────────────
+        t0 = time.monotonic()
         for u in units:
             ku = KnowledgeUnit(
                 id=UUID(u["_unit_id"]) if u.get("_unit_id") else None,
@@ -243,7 +339,15 @@ async def run_ingestion(
         # ingestion 完成后清除 BM25 缓存，下次检索时自动重建
         BM25Indexer.invalidate(str(doc.course_id))
         await session.flush()
-        logger.info(f"Document {doc.filename} ingestion complete: {len(units)} units")
+        timings["db_insert"] = round(time.monotonic() - t0, 2)
+        timings["total"] = round(time.monotonic() - t_total, 2)
+        logger.info(
+            "Document %s ingestion complete: %d units, 全流程耗时=%.2fs, 明细=%s",
+            doc.filename,
+            len(units),
+            timings["total"],
+            timings,
+        )
 
     except Exception as exc:
         doc.status = "failed"
