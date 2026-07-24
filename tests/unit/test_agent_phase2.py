@@ -110,8 +110,8 @@ class TestRoutingPhase2:
 
     def test_route_by_intent_practice_and_review(self):
         from coursepilot.agent.routing import route_by_intent
-        assert route_by_intent({"intent": "practice"}) == "get_mastery"
-        assert route_by_intent({"intent": "review"}) == "get_mastery"
+        assert route_by_intent({"intent": "practice"}) == "human_review"
+        assert route_by_intent({"intent": "review"}) == "human_review"
 
     def test_route_by_intent_diagnose(self):
         from coursepilot.agent.routing import route_by_intent

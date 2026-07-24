@@ -23,12 +23,15 @@ async def update_qa_record(
     token_count: int = 0,
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
-) -> int:
+) -> QARecord:
     """持久化 QA 记录并更新会话 token 计数和成本估算
 
-    :returns: token_count
+    :returns: 写入的 QARecord 实例
     """
-    # 1. 写入 QA 记录
+    from coursepilot.agent.memory import estimate_importance
+    from coursepilot.rag.encoder import Encoder
+
+    # 1. 写入 QA 记录（P4: 同时计算 embedding + importance）
     qa = QARecord(
         user_id=UUID(user_id),
         course_id=UUID(course_id),
@@ -38,6 +41,15 @@ async def update_qa_record(
         retrieved_units=retrieved_units,
         citations=citations,
     )
+    try:
+        qa.importance = await estimate_importance(query, answer)
+        encoder = Encoder()
+        if encoder._model is not None:
+            vec = encoder.encode_qa_records([{"query": query, "answer": answer}])[0]
+            qa.embedding = vec["dense"]
+    except Exception:
+        logger.warning("QARecord embedding/importance 计算失败", exc_info=True)
+
     session.add(qa)
 
     # 2. 更新会话 token 计数和成本
@@ -53,4 +65,4 @@ async def update_qa_record(
         agent_session.estimated_cost = input_cost + output_cost
 
     await session.flush()
-    return token_count
+    return qa

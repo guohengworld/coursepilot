@@ -18,7 +18,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -528,11 +528,21 @@ class TestGenerator:
         assert "未指定课程" in _format_course({})
 
     def test_system_prompt_format(self):
+        from coursepilot.agent.memory import ContextManager
         from coursepilot.rag.generator import SYSTEM_PROMPT
-        prompt = SYSTEM_PROMPT.format(
-            course_context="课程：测试课\n教材：测试教材",
-            sources="<source id=\"1\">测试内容</source>",
+
+        cm = ContextManager()
+        view = cm.build_view(
+            node="query_rag",
+            system_prompt=SYSTEM_PROMPT,
+            course_context={"name": "测试课", "textbook": "测试教材", "chapters": []},
+            user_profile=None,
+            conversation=[],
+            rolling_summary="",
+            current_query="问题",
+            rag_context='<source id="1">测试内容</source>',
         )
+        prompt = view.system_prefix.replace("{sources}", view.rag_context)
         assert "测试课" in prompt
         assert "测试教材" in prompt
         assert '<source id="1">' in prompt
@@ -543,38 +553,60 @@ class TestGenerator:
     async def test_generate(self):
         from coursepilot.rag.generator import Generator
         g = Generator()
-        answer = await g.generate(
+        answer, token_info = await g.generate(
             query="1+1等于几",
             context='<source id="1" path="数学/算术" pages="" book="测试">加法是最基本的运算</source>',
             course_context={"name": "数学", "textbook": "测试教材", "chapters": ["算术"]},
-            max_tokens=100,
         )
         assert isinstance(answer, str)
         assert len(answer) > 0
+        assert "context_budget" in token_info
 
-    @pytest.mark.skipif(not API_KEY_AVAILABLE, reason="未配置 LLM_API_KEY")
     @pytest.mark.asyncio
-    @pytest.mark.slow
     async def test_generate_stream(self):
+        """流式生成逻辑测试：mock OpenAI client，避免依赖真实 API 稳定性。"""
         from coursepilot.rag.generator import Generator
-        g = Generator()
-        tokens = []
-        async for token in g.generate_stream(
-            query="1+1等于几",
-            context='<source id="1" path="数学/算术" pages="" book="测试">加法是最基本的运算</source>',
-            course_context={"name": "数学", "textbook": "测试教材", "chapters": ["算术"]},
-            max_tokens=50,
-        ):
-            tokens.append(token)
-        assert len(tokens) > 0
-        assert all(isinstance(t, str) for t in tokens)
+
+        g = Generator(api_key="fake-key", base_url="http://localhost")
+
+        class _FakeDelta:
+            content = "2"
+
+        class _FakeChoice:
+            delta = _FakeDelta()
+
+        class _FakeChunk:
+            choices = [_FakeChoice()]
+
+        mock_stream = AsyncMock()
+        mock_stream.__aiter__.return_value = [_FakeChunk(), _FakeChunk()]
+
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
+
+        with patch("coursepilot.rag.generator.openai.AsyncOpenAI", return_value=mock_client):
+            tokens = []
+            async for token in g.generate_stream(
+                query="1+1等于几",
+                context='<source id="1">加法是最基本的运算</source>',
+                course_context={"name": "数学"},
+                max_tokens=50,
+            ):
+                tokens.append(token)
+
+        assert len(tokens) == 2
+        assert all(t == "2" for t in tokens)
 
     def test_generate_no_api_key(self):
         from coursepilot.rag.generator import Generator
-        g = Generator(api_key="")
-        import asyncio
-        answer = asyncio.run(g.generate("test", "context", None))
+        from coursepilot.config import settings
+
+        with patch.object(settings, "llm_api_key", ""):
+            g = Generator(api_key="")
+            import asyncio
+            answer, token_info = asyncio.run(g.generate("test", "context", None))
         assert "未配置" in answer
+        assert "context_budget" in token_info
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -590,15 +622,18 @@ class TestRetrieverIntegration:
     async def test_retrieve_empty_course(self):
         """不存在的课程应返回空上下文"""
         from coursepilot.rag.retriever import Retriever
-        from coursepilot.rag.config import RAGConfig
 
-        # 用最小配置避免外部调用
         retriever = Retriever()
         # 对不存在的课程，hybrid_search 应返回空
         # 这里用 mock 避免真正调用
+        mock_result = MagicMock()
+        mock_result.all.return_value = []
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
         with patch.object(retriever.vector_store, 'hybrid_search', return_value=[]):
             context, metadata = await retriever.retrieve(
-                session=AsyncMock(),
+                session=mock_session,
                 query="测试问题",
                 course_id="00000000-0000-0000-0000-000000000000",
                 enable_rewrite=False,
@@ -612,10 +647,15 @@ class TestRetrieverIntegration:
         from coursepilot.rag.retriever import Retriever
 
         retriever = Retriever()
+        mock_result = MagicMock()
+        mock_result.all.return_value = []
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
         with patch.object(retriever.rewriter, 'rewrite') as mock_rewrite:
             with patch.object(retriever.vector_store, 'hybrid_search', return_value=[]):
                 context, metadata = await retriever.retrieve(
-                    session=AsyncMock(),
+                    session=mock_session,
                     query="原始问题",
                     course_id="00000000-0000-0000-0000-000000000000",
                     enable_rewrite=False,
@@ -635,11 +675,12 @@ class TestContextFormatting:
             {"content": "段落一", "kp_path": "数学/第一章", "score": 0.9},
             {"content": "段落二", "kp_path": "数学/第二章", "score": 0.8},
         ]
-        result = _format_units(units, max_chars=10000)
-        assert '<source id="1"' in result
-        assert '<source id="2"' in result
-        assert "段落一" in result
-        assert "段落二" in result
+        context, uuids = _format_units(units, max_chars=10000)
+        assert '<source id="1"' in context
+        assert '<source id="2"' in context
+        assert "段落一" in context
+        assert "段落二" in context
+        assert len(uuids) == 2
 
     def test_format_units_truncation(self):
         from coursepilot.rag.retriever import _format_units
@@ -647,7 +688,8 @@ class TestContextFormatting:
             {"content": "x" * 5000, "kp_path": "数学/第一章", "score": 0.9},
             {"content": "y" * 5000, "kp_path": "数学/第二章", "score": 0.8},
         ]
-        result = _format_units(units, max_chars=200)
+        context, uuids = _format_units(units, max_chars=200)
         # 应该只有第一个 source（第二个因为超上限被截断）
-        assert '<source id="1"' in result
-        assert len(result) < 5000  # 被截断了
+        assert '<source id="1"' in context
+        assert len(context) < 5000  # 被截断了
+        assert len(uuids) == 1

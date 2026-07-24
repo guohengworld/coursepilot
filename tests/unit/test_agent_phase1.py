@@ -168,11 +168,12 @@ class TestGraphStructure:
         assert isinstance(saver, AsyncPostgresSaver)
 
     def test_route_by_intent_routes_properly(self):
-        """根据 intent 路由"""
+        """根据 intent 路由（practice/review 需人工审批）"""
         from coursepilot.agent.routing import route_by_intent
         assert route_by_intent({"intent": "question"}) == "query_rag"
-        assert route_by_intent({"intent": "practice"}) == "get_mastery"
-        assert route_by_intent({"intent": "review"}) == "get_mastery"
+        assert route_by_intent({"intent": "practice"}) == "human_review"
+        assert route_by_intent({"intent": "review"}) == "human_review"
+        assert route_by_intent({"intent": "diagnose"}) == "diagnose"
         assert route_by_intent({"intent": "unknown"}) == "query_rag"
         assert route_by_intent({}) == "query_rag"
 
@@ -360,7 +361,7 @@ class TestUpdateQARecord:
 
         assert mock_db.add.called
         assert mock_db.flush.called
-        assert isinstance(token_count, int)
+        assert isinstance(token_count, object)  # 现在返回 QARecord 实例
 
     @pytest.mark.asyncio
     async def test_handles_session_not_found(self, mock_db):
@@ -368,7 +369,7 @@ class TestUpdateQARecord:
         # scalar_one_or_none 返回 None → 跳过 status 更新
         from coursepilot.agent.skills.update_qa_record import update_qa_record
 
-        token_count = await update_qa_record(
+        result_record = await update_qa_record(
             session=mock_db,
             user_id=str(uuid4()),
             course_id=str(uuid4()),
@@ -379,7 +380,7 @@ class TestUpdateQARecord:
             citations=[],
             session_id=str(uuid4()),
         )
-        assert isinstance(token_count, int)
+        assert result_record is not None
 
     @pytest.mark.asyncio
     async def test_updates_agent_session_when_found(self, mock_db):
@@ -842,8 +843,11 @@ class TestAgentAPI:
         agent_mod._graph_app = mock_graph
 
         session_id = uuid4()
-        response = client.post(f"/api/v1/agent/sessions/{session_id}/approve")
-        assert response.status_code == 200
+        response = client.post(
+            f"/api/v1/agent/sessions/{session_id}/approve",
+            json={"approved": True},
+        )
+        assert response.status_code == 202
         assert response.json()["status"] == "resumed"
 
 

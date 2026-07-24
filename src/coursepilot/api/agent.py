@@ -5,6 +5,7 @@ APIRouter + Depends(get_session) + Depends(get_current_user)。
 """
 import asyncio
 import logging
+from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -155,6 +156,8 @@ async def chat(
             "user_id": str(current_user.id),
             "session_id": str(agent_session.id),
             "messages": agent_session.conversation or [],
+            "conversation": agent_session.conversation or [],
+            "rolling_summary": agent_session.rolling_summary or "",
             "course_context": {},
             "user_profile": None,
             "recent_qa": [],
@@ -165,6 +168,10 @@ async def chat(
             "sources": [],
             "token_count": 0,
             "llm_calls": [],
+            "context_budget": None,
+            "layer_tokens": None,
+            "cache_hit_estimated": None,
+            "compaction_count": 0,
             "error": None,
         }
 
@@ -188,6 +195,8 @@ async def chat(
             "user_id": str(current_user.id),
             "session_id": str(agent_session.id),
             "messages": [],
+            "conversation": [],
+            "rolling_summary": "",
             "course_context": {},
             "user_profile": None,
             "recent_qa": [],
@@ -198,6 +207,10 @@ async def chat(
             "sources": [],
             "token_count": 0,
             "llm_calls": [],
+            "context_budget": None,
+            "layer_tokens": None,
+            "cache_hit_estimated": None,
+            "compaction_count": 0,
             "error": None,
         }
 
@@ -271,6 +284,17 @@ async def get_session_status(
         raise HTTPException(status_code=404, detail="会话不存在")
     if agent_session.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    # 检测处理超时：若会话 processing 超过 5 分钟，自动标记为 failed
+    if agent_session.status == "processing":
+        stale_threshold = datetime.now(timezone.utc) - timedelta(seconds=300)
+        updated_at = agent_session.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        if updated_at < stale_threshold:
+            agent_session.status = "failed"
+            agent_session.intent = "error"
+            await db_session.commit()
 
     # 从 quiz_data 中剥离答案，只返回题目供前端展示
     questions = None
@@ -395,6 +419,11 @@ async def delete_session(
         from coursepilot.governance.rbac import has_permission
         if not has_permission(current_user.role, "agent:session:list_all"):
             raise HTTPException(status_code=403, detail="无权删除此会话")
+
+    # 若会话正在处理中，先标记为 failed 以终止后台任务的状态更新
+    if agent_session.status == "processing":
+        agent_session.status = "failed"
+        agent_session.intent = "error"
 
     await db_session.delete(agent_session)
     await db_session.commit()

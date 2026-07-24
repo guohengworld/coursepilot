@@ -38,7 +38,14 @@ async def classify_intent(
     if recent_qa:
         parts.append("最近回答：")
         for qa in recent_qa[-3:]:
-            parts.append(f"  Q: {qa['query']}")
+            # 兼容两种历史格式：数据库 QARecord(query/answer) 和 conversation(role/content)
+            if isinstance(qa, dict) and "query" in qa:
+                q_text = qa["query"]
+            elif isinstance(qa, dict) and qa.get("role") == "user" and "content" in qa:
+                q_text = qa["content"]
+            else:
+                continue
+            parts.append(f"  Q: {q_text}")
 
     prompt = "\n".join(parts)
     logger.info("classify_intent LLM prompt:\n%s", prompt)
