@@ -64,6 +64,10 @@ class UserProfile(Base):
         DateTime(timezone=True), server_default=func.now(),
         nullable=False, comment="最后一次预计算时间",
     )
+    memory_facts: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, default=dict,
+        comment='L3 语义记忆：{"mastered_kps":[], "weak_kps":[], "common_mistakes":[], "learning_style":{}}',
+    )
 
     def __repr__(self) -> str:
         return f"<UserProfile user={self.user_id} course={self.course_id}>"

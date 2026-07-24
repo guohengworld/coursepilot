@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from coursepilot.db import Base
@@ -59,6 +59,9 @@ class AgentSession(Base):
     )
     conversation: Mapped[list | None] = mapped_column(
         JSONB, nullable=True, default=list, comment="多轮对话历史 [{'role', 'content', 'intent'}]",
+    )
+    rolling_summary: Mapped[str | None] = mapped_column(
+        Text, nullable=True, default="", comment="L2 滚动摘要（老轮次压缩后）",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False,

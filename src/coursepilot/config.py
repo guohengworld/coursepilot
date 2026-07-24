@@ -6,7 +6,6 @@
 """
 from pathlib import Path
 
-from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 项目根目录（config.py 位于 src/coursepilot/，上溯三级）
@@ -30,6 +29,17 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com"
     llm_temperature: float = 0.3
 
+    # ── 上下文窗口预算（ContextManager 使用）───────────────
+    llm_context_budget: dict = {
+        "total_tokens": 64_000,
+        "reserved_output": 4_096,
+        "safety_margin": 1_024,
+        "max_recent_turns": 6,
+        "rolling_summary_max_tokens": 1_500,
+        "user_profile_max_tokens": 400,
+        "rag_default_max_tokens": 8_000,
+    }
+
     # ── RAG 检索参数 ────────────────────────────────────
     dense_top_k: int = 20       # 稠密检索返回条数
     sparse_top_k: int = 20      # BM25 稀疏检索返回条数
@@ -38,13 +48,16 @@ class Settings(BaseSettings):
     level_penalty: float = 0.1  # 层级不匹配惩罚系数
 
     # ── Milvus ─────────────────────────────────────────
-    milvus_uri: str = "data/milvus/milvus.db"     # Milvus Lite 存储路径（基于项目根目录的相对路径，也支持绝对路径）
+    # Milvus Lite 存储路径（基于项目根目录的相对路径，也支持绝对路径）
+    milvus_uri: str = "data/milvus/milvus.db"
     milvus_collection: str = "knowledge_units"
 
     # ── Ingestion ───────────────────────────────────────
     pdf_heading_font_min: int = 14   # 识别为标题的最小字号
     kp_max_tokens: int = 512         # 知识单元最大 token 数
     chunk_overlap: int = 50          # 切分重叠字数
+    pdf_enable_text_fast_path: bool = True  # 文字版 PDF 是否走 PyMuPDF 快速通道
+    pdf_text_min_chars_per_page: int = 200  # 采样页平均字符数超过此值视为文字版
 
     # ── MinerU ────────────────────────────────────────
     mineru_backend: str = "pipeline"       # pipeline / hybrid-engine

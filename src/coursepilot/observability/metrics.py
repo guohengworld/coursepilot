@@ -181,3 +181,90 @@ async def get_daily_counts(
         )
 
     return [{"date": str(row[0]), "count": row[1]} for row in rows]
+
+
+async def get_context_metrics(
+    session_id: str,
+) -> dict:
+    """获取单次会话的上下文预算与记忆层指标（P5 可观测）。
+
+    从 agent_sessions.conversation / rolling_summary 反推 L1/L2，
+    并汇总 llm_calls 中记录的 context_budget / layer_tokens / cache_hit_estimated。
+    """
+    from coursepilot.agent.memory.context_manager import estimate_tokens
+
+    async with async_session_factory() as session:
+        agent_session = await session.get(AgentSession, UUID(session_id))
+        if not agent_session:
+            return {"error": "会话不存在"}
+
+        conversation = agent_session.conversation or []
+        rolling_summary = agent_session.rolling_summary or ""
+        llm_calls = agent_session.sources or []  # sources 被复用存放 llm_calls？不，llm_calls 没存。这里只展示当前能拿到的。
+
+        # 实际上 llm_calls 只存在于运行时 state，未持久化到 DB。
+        # 为了可观测，把它放到 agent_session.sources 里不合适；先保留结构，后续可改 schema。
+        l1_tokens = sum(
+            estimate_tokens(t.get("content", ""))
+            for t in conversation
+        )
+        l2_tokens = estimate_tokens(rolling_summary)
+
+        return {
+            "session_id": session_id,
+            "l1_turns": len(conversation),
+            "l1_tokens": l1_tokens,
+            "l2_tokens": l2_tokens,
+            "total_history_tokens": l1_tokens + l2_tokens,
+            "rolling_summary_present": bool(rolling_summary),
+            "token_count": agent_session.token_count,
+            "estimated_cost": float(agent_session.estimated_cost),
+            "note": "llm_calls 详细指标需在 AgentState 中持久化后扩展",
+        }
+
+
+async def get_memory_layer_stats(
+    course_id: str,
+    days: int = 30,
+) -> dict:
+    """统计课程层面的记忆层健康度（P5）。"""
+    from coursepilot.models import QARecord, UserProfile
+
+    since = datetime.now(UTC) - timedelta(days=days)
+
+    async with async_session_factory() as session:
+        qa_total = await session.scalar(
+            select(sa_func.count(QARecord.id)).where(
+                QARecord.course_id == UUID(course_id),
+                QARecord.created_at >= since,
+            )
+        )
+        qa_with_embedding = await session.scalar(
+            select(sa_func.count(QARecord.id)).where(
+                QARecord.course_id == UUID(course_id),
+                QARecord.created_at >= since,
+                QARecord.embedding.isnot(None),
+            )
+        )
+        profile_count = await session.scalar(
+            select(sa_func.count(UserProfile.id)).where(
+                UserProfile.course_id == UUID(course_id),
+            )
+        )
+        profile_with_facts = await session.scalar(
+            select(sa_func.count(UserProfile.id)).where(
+                UserProfile.course_id == UUID(course_id),
+                UserProfile.memory_facts.isnot(None),
+            )
+        )
+
+    return {
+        "course_id": course_id,
+        "period_days": days,
+        "qa_total": qa_total or 0,
+        "qa_with_embedding": qa_with_embedding or 0,
+        "embedding_coverage": round((qa_with_embedding or 0) / max(1, qa_total or 0), 2),
+        "profile_count": profile_count or 0,
+        "profile_with_facts": profile_with_facts or 0,
+        "facts_coverage": round((profile_with_facts or 0) / max(1, profile_count or 0), 2),
+    }

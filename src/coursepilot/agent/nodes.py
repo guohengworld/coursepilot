@@ -20,7 +20,7 @@ from coursepilot.agent.skills.query_rag import query_rag
 from coursepilot.agent.skills.review_plan import review_plan
 from coursepilot.agent.skills.update_qa_record import update_qa_record
 from coursepilot.db import async_session_factory
-from coursepilot.models import AgentSession
+from coursepilot.models import AgentSession, User
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +46,14 @@ async def build_context_node(state: dict) -> dict:
         return {"course_context": {}, "user_profile": None, "recent_qa": [], "error": str(e)}
 
 async def classify_node(state: dict) -> dict:
-    """意图分类"""
+    """意图分类（使用 conversation 替代仅最近 QA）"""
     try:
+        # 优先使用 conversation 最近轮次；未接入时回退 recent_qa
+        conversation = state.get("conversation") or state.get("recent_qa", [])
         intent, token_info = await classify_intent(
             query=state["query"],
             course_context=state.get("course_context", {}),
-            recent_qa=state.get("recent_qa", []),
+            recent_qa=conversation,
         )
         llm_calls = list(state.get("llm_calls", []))
         llm_calls.append({"node": "classify", **token_info})
@@ -61,7 +63,7 @@ async def classify_node(state: dict) -> dict:
         return {"intent": "question", "error": str(e)}
 
 async def query_rag_node(state: dict) -> dict:
-    """RAG 检索 + LLM 生成"""
+    """RAG 检索 + LLM 生成（携带分层记忆）"""
     try:
         async with async_session_factory() as session:
             answer, context, metadata, sources, token_info = await query_rag(
@@ -69,6 +71,9 @@ async def query_rag_node(state: dict) -> dict:
                 query=state["query"],
                 course_id=state["course_id"],
                 course_context=state.get("course_context", {}),
+                conversation=state.get("conversation"),
+                rolling_summary=state.get("rolling_summary", ""),
+                user_profile=state.get("user_profile"),
             )
         llm_calls = list(state.get("llm_calls", []))
         llm_calls.append({"node": "query_rag", **token_info})
@@ -88,10 +93,11 @@ async def query_rag_node(state: dict) -> dict:
         }
 
 async def finalize_node(state: dict) -> dict:
-    """持久化 + 会话更新 + 异步触发 profile_updater
+    """持久化 + 会话更新 + 滚动摘要 + 异步触发 profile_updater
 
     Phase 3 增强：
       - 汇总 llm_calls 写入真实 token 计数和成本估算
+      - 维护 conversation（L1）与 rolling_summary（L2）
       - 末尾异步触发 profile_updater.update_profile()
     """
     try:
@@ -120,7 +126,7 @@ async def finalize_node(state: dict) -> dict:
             # 但这里已经在用 async_session_factory 了，可以直接调用
 
             # ── Step C: 写入 QA Record ──
-            token_count = await update_qa_record(
+            qa_record = await update_qa_record(
                 session=session,
                 user_id=state["user_id"],
                 course_id=state["course_id"],
@@ -135,8 +141,8 @@ async def finalize_node(state: dict) -> dict:
                 completion_tokens=total_completion,
             )
 
-            # ── Step D: 更新会话状态 ──
-            await _update_session_intent(
+            # ── Step D: 更新会话状态（含 L1/L2 记忆） ──
+            agent_session = await _update_session_intent(
                 session, state["session_id"],
                 state.get("intent", "question"),
                 human_review_result=state.get("human_review_result"),
@@ -146,7 +152,22 @@ async def finalize_node(state: dict) -> dict:
                 query=state.get("query", ""),
             )
 
-            # ── Step E: 保存学情诊断报告 ──
+            # 滚动压缩：当 L1 过长时，把老轮次压缩进 rolling_summary
+        compaction_count = state.get("compaction_count", 0)
+        if agent_session:
+            compaction_count += await _maybe_compact_session(state, agent_session)
+
+        # 记录压缩次数到 llm_calls 便于可观测（P5）
+        if compaction_count > 0:
+            llm_calls.append({
+                "node": "compaction",
+                "compacted_turns": compaction_count,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            })
+
+        # ── Step E: 保存学情诊断报告 ──
             diagnosis = state.get("diagnosis")
             if diagnosis and diagnosis.get("total_practiced", 0) > 0:
                 from coursepilot.models import DiagnosisReport
@@ -166,7 +187,7 @@ async def finalize_node(state: dict) -> dict:
             # ── 提交事务 ──
             await session.commit()
 
-        # ── Step E: 异步 audit 日志（独立 session，不阻塞） ──
+        # ── Step F: 异步 audit 日志（独立 session，不阻塞） ──
         import asyncio
         asyncio.create_task(log_agent_chat(
             user_id=state["user_id"],
@@ -181,13 +202,53 @@ async def finalize_node(state: dict) -> dict:
                 issues=guard_issues,
             ))
 
-        # ── Step F: Profile 更新（已有） ──
+        # ── Step G: Profile 更新（已有） ──
         asyncio.create_task(update_profile(
             user_id=state["user_id"],
             course_id=state["course_id"],
         ))
 
-        return {"token_count": total_tokens, "error": None}
+        # ── Step H: L3 语义记忆抽取（P3） ──
+        try:
+            from coursepilot.agent.memory import extract_facts_for_session
+            asyncio.create_task(extract_facts_for_session(
+                user_id=state["user_id"],
+                course_id=state["course_id"],
+                session_id=state["session_id"],
+            ))
+        except Exception:
+            logger.exception("触发 L3 抽取任务失败")
+
+        # ── Step I: 同步触发一次 QA embedding 补全（P4） ──
+        try:
+            from coursepilot.agent.memory import ensure_qa_embeddings
+            asyncio.create_task(ensure_qa_embeddings_for_user_course(
+                user_id=state["user_id"],
+                course_id=state["course_id"],
+            ))
+        except Exception:
+            logger.exception("触发 QA embedding 补全失败")
+
+        # P5: 把可观测快照写回 state，供 admin 控制台消费
+        # 这里取最近一次 query_rag 的 budget 信息
+        last_budget = None
+        last_layer_tokens = None
+        last_cache_hit = None
+        for call in reversed(llm_calls):
+            if call.get("node") == "query_rag":
+                last_budget = call.get("context_budget")
+                last_layer_tokens = call.get("layer_tokens")
+                last_cache_hit = call.get("cache_hit_estimated")
+                break
+
+        return {
+            "token_count": total_tokens,
+            "context_budget": last_budget,
+            "layer_tokens": last_layer_tokens,
+            "cache_hit_estimated": last_cache_hit,
+            "compaction_count": compaction_count,
+            "error": None,
+        }
     except Exception as e:
         logger.exception("finalize 节点异常")
         return {"error": str(e)}
@@ -199,34 +260,87 @@ async def _update_session_intent(
     answer: str | None = None,
     sources: list[dict] | None = None,
     query: str | None = None,
-) -> None:
-    """更新 agent_session 的 intent、answer、sources、quiz_data、conversation 等字段"""
+) -> AgentSession | None:
+    """更新 agent_session 的 intent、answer、sources、quiz_data、conversation 等字段。
+
+    返回更新后的 AgentSession 实例，供调用方继续修改（如滚动摘要）。
+    """
     result = await session.execute(
         select(AgentSession).where(AgentSession.id == UUID(session_id))
     )
     agent_session = result.scalar_one_or_none()
-    if agent_session:
-        agent_session.intent = intent
-        if answer is not None:
-            agent_session.answer = answer
-        if sources is not None:
-            agent_session.sources = sources
-        if quiz_data and intent in ("practice", "review"):
-            agent_session.quiz_data = quiz_data
-        # 追加到多轮对话
-        conv = list(agent_session.conversation or [])
-        if query:
-            conv.append({"role": "user", "content": query, "intent": None})
-        conv.append({
-            "role": "assistant",
-            "content": answer or "",
-            "intent": intent,
-        })
-        agent_session.conversation = conv
-        if human_review_result == "rejected":
-            agent_session.status = "rejected"
-        else:
-            agent_session.status = "completed"
+    if not agent_session:
+        return None
+
+    agent_session.intent = intent
+    if answer is not None:
+        agent_session.answer = answer
+    if sources is not None:
+        agent_session.sources = sources
+    if quiz_data and intent in ("practice", "review"):
+        agent_session.quiz_data = quiz_data
+
+    # 追加到多轮对话 L1
+    conv = list(agent_session.conversation or [])
+    if query:
+        conv.append({"role": "user", "content": query, "intent": None})
+    conv.append({
+        "role": "assistant",
+        "content": answer or "",
+        "intent": intent,
+        "sources": sources or [],
+        "query": query or "",
+    })
+    agent_session.conversation = conv
+    if human_review_result == "rejected":
+        agent_session.status = "rejected"
+    else:
+        agent_session.status = "completed"
+
+    return agent_session
+
+
+async def ensure_qa_embeddings_for_user_course(user_id: str, course_id: str) -> int:
+    """后台任务：为指定用户/课程补全 QARecord embedding（P4）。"""
+    from coursepilot.agent.memory import ensure_qa_embeddings
+    from coursepilot.db import async_session_factory
+    try:
+        async with async_session_factory() as session:
+            return await ensure_qa_embeddings(session)
+    except Exception:
+        logger.exception("QA embedding 补全失败 user=%s course=%s", user_id, course_id)
+        return 0
+
+
+async def _maybe_compact_session(state: dict, agent_session: AgentSession) -> int:
+    """当 L1 记忆超过阈值时，把老轮次压缩进 L2 rolling_summary。
+
+    返回实际压缩的轮数，供调用方记录可观测指标。
+    """
+    from coursepilot.agent.memory import ContextManager, compact_conversation
+
+    cm = ContextManager()
+    conversation = agent_session.conversation or []
+    rolling_summary = str(agent_session.rolling_summary or "")
+    if not cm.needs_compaction(conversation, rolling_summary):
+        return 0
+
+    new_summary, compacted_count = await compact_conversation(
+        conversation,
+        existing_summary=rolling_summary,
+        max_summary_tokens=cm.rolling_summary_max,
+    )
+    if compacted_count == 0:
+        return 0
+
+    # 保留最近轮次作为 L1，老轮次转为 L2
+    agent_session.rolling_summary = new_summary
+    agent_session.conversation = conversation[compacted_count:]
+    logger.info(
+        "会话 %s 滚动压缩：%d 轮 -> summary，剩余 %d 轮在 L1",
+        agent_session.id, compacted_count, len(agent_session.conversation)
+    )
+    return compacted_count
 
 def _first_kp_path(metadata: dict) -> str | None:
     paths = metadata.get("source_kp_paths", [])
@@ -274,12 +388,19 @@ async def evaluate_quiz_node(state: dict) -> dict:
             retry_count += 1
         llm_calls = list(state.get("llm_calls", []))
         llm_calls.append({"node": "evaluate_quiz", **token_info})
-        return {"eval_result": result, "retry_count": retry_count, "llm_calls": llm_calls, "error": None}
+        return {
+            "eval_result": result,
+            "retry_count": retry_count,
+            "llm_calls": llm_calls,
+            "error": None,
+        }
     except Exception as e:
         logger.exception("evaluate_quiz_node 异常")
-        return {"eval_result": {"status": "FAIL", "score": 0.0},
-                "retry_count": state.get("retry_state", 0) + 1,
-                "error": str(e)}
+        return {
+            "eval_result": {"status": "FAIL", "score": 0.0},
+            "retry_count": state.get("retry_state", 0) + 1,
+            "error": str(e),
+        }
 
 async def create_plan_node(state: dict) -> dict:
     """practice 路径终点：将生成的 quiz 写入 answer，准备返回给用户"""
@@ -388,6 +509,7 @@ async def _find_topic_kp(session: AsyncSession, course_id: str, query: str) -> s
     返回最长匹配的 kp_path，未找到返回空字符串。
     """
     from sqlalchemy import or_
+
     from coursepilot.models import KnowledgePoint
 
     candidates = [
@@ -454,14 +576,32 @@ async def review_plan_node(state: dict) -> dict:
 async def human_review_node(state: dict) -> dict:
     """人类审批节点：在高风险操作前暂停等待确认
 
+    教师和超级管理员自动跳过审批（auto-approve），
+    学生则需要等待教师人工确认。
+
     使用 interrupt() 暂停图执行 → 保存 checkpoint
     恢复时传入 resume={"approved": True/False, "feedback": "..."}
 
     interrupt() 的参数是发送给调用者的消息（展示给前端）
     """
     intent = state.get("intent", "")
+    user_id = state.get("user_id", "")
 
-    if intent in HUMAN_REVIEW_INTENTS:
+    # 查询用户角色，教师和超级管理员自动通过审批
+    auto_approve = False
+    if user_id:
+        try:
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    select(User).where(User.id == UUID(user_id))
+                )
+                user = result.scalar_one_or_none()
+                if user and user.role in ("teacher", "super"):
+                    auto_approve = True
+        except Exception:
+            logger.warning("查询用户角色失败 user_id=%s", user_id)
+
+    if intent in HUMAN_REVIEW_INTENTS and not auto_approve:
         # interrupt() 暂停执行，等待 resume 值
         # 返回值是调用 Command(resume=...) 时传来的数据
         approval = interrupt({

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import UUID, ForeignKey, Text, String, SmallInteger, ARRAY, DateTime, func, Integer
+from sqlalchemy import UUID, ForeignKey, Text, String, SmallInteger, ARRAY, DateTime, Float, func, Integer
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,6 +35,12 @@ class QARecord(Base):
     citations: Mapped[list] = mapped_column(JSONB, default=list, comment="参考来源",)
     feedback: Mapped[int | None] = mapped_column(SmallInteger, default=None, comment="用户反馈",)
     latency_ms: Mapped[int | None] = mapped_column(Integer, default=None, comment="处理耗时（毫秒）",)
+    embedding: Mapped[list | None] = mapped_column(
+        ARRAY(Float), default=None, comment="query+answer 的 BGE-M3 dense 向量",
+    )
+    importance: Mapped[float | None] = mapped_column(
+        Float, default=None, comment="记忆重要性评分 0.0-1.0",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, comment="创建时间",
     )

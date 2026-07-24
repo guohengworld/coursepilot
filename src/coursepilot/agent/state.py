@@ -3,7 +3,8 @@
 所有节点共享的 TypeDict 状态
 Phase 1仅使用线性路径的字段，Phase 2+ 在此基础上扩展
 """
-from typing import Any, TypedDict
+from typing import TypedDict
+
 
 class AgentState(TypedDict):
     """Agent 执行过程中所有节点共享的状态"""
@@ -15,6 +16,8 @@ class AgentState(TypedDict):
     # 会话元数据
     session_id: str         # agent_sessions.id
     messages: list[dict]    # 历史消息 [{role, content}]
+    conversation: list[dict]  # 完整多轮对话（L1 + 已压缩指针）
+    rolling_summary: str    # L2 滚动摘要
 
     # build_context 节点输出
     course_context: dict    # {name, textbook, chapters} 供 System Prompt
@@ -41,17 +44,23 @@ class AgentState(TypedDict):
 
     # 练习
     quiz_data: dict             # generate_quiz 输出: {"questions": [...]}
-    eval_result: dict           # evaluate_quiz 输出: {"status": "PASS"/"FAIL", "score": ..., "feedback": {...}}
+    eval_result: dict           # evaluate_quiz 输出
     retry_count: int            # evaluate 重试计数器（0/1/2）
 
     # 诊断
-    diagnosis: dict             # diagnose 输出: {"weak_kps": [...], "kp_stats": {...}, "summary": "..."}
+    diagnosis: dict             # diagnose 输出
 
     # 复习计划
-    review_plan: dict           # review_plan 输出: {"items": [...], "total_count": N, "plan_id": "..."}
+    review_plan: dict           # review_plan 输出
 
-    # Token 用量追踪
-    llm_calls: list[dict]       # [{node, prompt_tokens, completion_tokens, total_tokens}, ...]
+    # Token 用量追踪（P5 可观测：含 context_budget / layer_tokens / cache_hit_estimated）
+    llm_calls: list[dict]
+
+    # 上下文预算与可观测快照（供 admin 控制台展示）
+    context_budget: dict | None
+    layer_tokens: dict | None
+    cache_hit_estimated: dict | None
+    compaction_count: int
 
     # 人工审核结果
     human_review_result: str | None  # None / "approved" / "rejected"
