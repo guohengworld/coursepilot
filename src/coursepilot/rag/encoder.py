@@ -4,13 +4,15 @@ BGE-M3 编码器 —— 一次 forward 同时输出 dense + learned sparse 向�
 用法：
     encoder = Encoder()
     vecs = encoder.encode(["文本一", "文本二"])
-    # vecs[0] → {"dense": list[float], "sparse": dict[int, float]}
+    # vecs[0] → {"dense": [1024 floats], "sparse": {token_id: weight}}
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
+
+import torch
 
 from coursepilot.config import settings
 from coursepilot.rag.config import config
@@ -20,20 +22,47 @@ logger = logging.getLogger(__name__)
 _encoder_instance = None
 
 
-def _load_model():
-    """惰性加载 BGE-M3 模型（CPU 推理）"""
-    print(f"[DEBUG] embedding_model_path = '{settings.embedding_model_path}'")  # ← 加这行
-    print(f"[DEBUG] 目录是否存在: {Path(settings.embedding_model_path).exists()}")
-    try:
-        from FlagEmbedding import BGEM3FlagModel
+def _select_device() -> str:
+    """选择编码设备：优先 CUDA，否则 CPU。"""
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
 
-        logger.info("加载 BGE-M3 模型：%s", settings.embedding_model_path)
+
+def _load_model():
+    """惰性加载 BGE-M3 模型，优先使用 GPU。"""
+    print(f"[DEBUG] embedding_model_path = '{settings.embedding_model_path}'")
+    print(f"[DEBUG] 目录是否存在: {Path(settings.embedding_model_path).exists()}")
+
+    from FlagEmbedding import BGEM3FlagModel
+
+    device = _select_device()
+    use_fp16 = device.startswith("cuda")
+
+    try:
+        logger.info(
+            "加载 BGE-M3 模型：%s，device=%s，fp16=%s",
+            settings.embedding_model_path,
+            device,
+            use_fp16,
+        )
         return BGEM3FlagModel(
             settings.embedding_model_path,
-            use_fp16=False,
-            device="cpu",
+            use_fp16=use_fp16,
+            devices=device,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("BGE-M3 加载到 %s 失败 (%s)，尝试降级到 CPU", device, exc)
+        if device != "cpu":
+            try:
+                logger.info("降级加载 BGE-M3 到 CPU")
+                return BGEM3FlagModel(
+                    settings.embedding_model_path,
+                    use_fp16=False,
+                    devices="cpu",
+                )
+            except Exception as exc2:
+                logger.warning("BGE-M3 CPU 加载也失败 (%s)", exc2)
         logger.warning("加载 BGE-M3 模型失败", exc_info=True)
         return None
 
@@ -87,6 +116,15 @@ class Encoder:
     def encode_query(self, query: str) -> dict:
         """单条查询编码快捷方法"""
         return self.encode_queries([query])[0]
+
+    def encode_qa_records(self, records: list[dict[str, str]]) -> list[dict]:
+        """批量编码 QARecord，用于记忆召回（P4）。
+
+        :param records: [{"query": str, "answer": str}, ...]
+        :return: 与输入等长的向量列表，每个元素含 dense/sparse
+        """
+        texts = [f"Q: {r.get('query', '')}\nA: {r.get('answer', '')}" for r in records]
+        return self.encode(texts)
 
     @property
     def dim(self) -> int:

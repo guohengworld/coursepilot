@@ -10,24 +10,57 @@ from __future__ import annotations
 
 import logging
 
+import torch
+
 from coursepilot.config import settings
 from coursepilot.rag.config import config
 
 logger = logging.getLogger(__name__)
 
+
+def _select_device() -> str:
+    """选择重排序设备：优先 CUDA，否则 CPU。"""
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
 def _load_reranker():
-    """加载 bge-reranker-v2-m3（~1.5 GB，CPU 推理）"""
+    """加载 bge-reranker-v2-m3，优先 GPU，失败则降级 CPU。"""
     try:
         from FlagEmbedding import FlagReranker
-        logger.info("加载 bge-reranker-v2-m3: %s", settings.reranker_model_path)
+
+        device = _select_device()
+        use_fp16 = device.startswith("cuda")
+
+        logger.info(
+            "加载 bge-reranker-v2-m3: %s, device=%s, fp16=%s",
+            settings.reranker_model_path,
+            device,
+            use_fp16,
+        )
         return FlagReranker(
             settings.reranker_model_path,
-            use_fp16=False,
-            device="cpu",
+            use_fp16=use_fp16,
+            devices=device,
         )
     except OSError as e:
         logger.warning("reranker 加载失败 (OSError: %s)，将跳过重排序步骤", e)
         return None
+    except Exception as exc:
+        logger.warning("reranker 加载到 GPU 失败 (%s)，尝试降级到 CPU", exc)
+        try:
+            from FlagEmbedding import FlagReranker
+
+            logger.info("降级加载 bge-reranker-v2-m3 到 CPU")
+            return FlagReranker(
+                settings.reranker_model_path,
+                use_fp16=False,
+                devices="cpu",
+            )
+        except Exception as exc2:
+            logger.warning("reranker CPU 加载也失败 (%s)，将跳过重排序步骤", exc2)
+            return None
 
 
 class Reranker:
@@ -56,7 +89,7 @@ class Reranker:
 
         :param query: 查询文本
         :param candidates: 候选人列表  [{"content": str, "kp_path": str, ...}, ...]
-        :param top_k: 重排序后最相关的k条数据
+        :param top_k: 重排序后最终送入 LLM 的条数
         :return: 带"rerank_score" 字段的排序后列表
         """
         top_k = top_k or config.rerank_top_k
@@ -70,10 +103,19 @@ class Reranker:
 
         print(f"[reranker] 开始重排序, 候选数={len(candidates)}, top_k={top_k}")
         t0 = __import__("time").monotonic()
-        # 构造 query-doc 对
-        pairs = [[query, c["content"]] for c in candidates]
-        scores = self.model.compute_score(pairs, normalize=True)
-        print(f"[reranker] compute_score 完成, 耗时={(__import__('time').monotonic()-t0)*1000:.0f}ms")
+
+        try:
+            # 构造 query-doc 对
+            pairs = [[query, c["content"]] for c in candidates]
+            scores = self.model.compute_score(pairs, normalize=True)
+        except Exception as exc:
+            logger.warning("reranker compute_score 失败 (%s)，跳过重排序", exc)
+            for i, c in enumerate(candidates[:top_k]):
+                c["rerank_score"] = 1.0 - i * 0.01
+            return candidates[:top_k]
+
+        elapsed = (__import__("time").monotonic() - t0) * 1000
+        print(f"[reranker] compute_score 完成, 耗时={elapsed:.0f}ms")
 
         # 层级惩罚：更深的 kp_path 给轻微加分
         for i, c in enumerate(candidates):
@@ -91,9 +133,5 @@ class Reranker:
             if c["rerank_score"] >= config.reranker_min_score
         ]
 
-        filtered.sort(key=lambda x : x["rerank_score"], reverse=True)
+        filtered.sort(key=lambda x: x["rerank_score"], reverse=True)
         return filtered[:top_k]
-
-
-
-

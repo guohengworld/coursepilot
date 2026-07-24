@@ -24,7 +24,7 @@ class RAGConfig:
     sparse_top_k: int = 20  # sparse 检索返回条数
     rrf_k: int = 60  # RRF 融合参数
     rrf_weights: tuple[float, ...] = (1.5, 1.0)  # RRF 各来源权重 [Milvus, BM25]
-    rerank_top_k: int = 8  # 重排序后最终送入 LLM 的条数
+    rerank_top_k: int = 5  # 重排序后最终送入 LLM 的条数
 
     # == BM25 参数
     enable_bm25: bool = True  # 关闭 → 只用 Milvus 混合检索
