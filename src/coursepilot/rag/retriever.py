@@ -109,7 +109,7 @@ class Retriever:
                 [milvus_candidates, bm25_candidates],
                 k=config.rrf_k,
                 top_k=20,
-                weights=list(config.rrf_weights),
+                weights=[config.dense_weight, 1.0 - config.dense_weight],
             )
             print(f"[retriever] 阶段2c-RRF融合 候选数={len(candidates)}")
         else:

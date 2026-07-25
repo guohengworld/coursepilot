@@ -1,11 +1,15 @@
 """
-RAGAS 风格评估 —— 四大指标 + LLM-as-Judge + 参数网格搜索
+RAGAS 评估核心 —— 基于 RAGAS 库计算 8 项指标。
 
 指标：
-- Context Recall: 多少 ground-truth UUID 被检索到（确定性，评估门禁指标）
-- Context Precision: 检索到的上下文中多少真正相关（LLM-as-Judge）
-- Faithfulness: 生成的回答是否忠实于上下文（LLM-as-Judge）
-- Answer Relevancy: 回答是否切题（LLM-as-Judge）
+- Context Recall: ground_truth_contexts(UUID) 被检索到的比例（客观指标）
+- Context Precision: RAGAS LLMContextPrecisionWithReference
+- Context Entity Recall: RAGAS ContextEntityRecall
+- Faithfulness: RAGAS Faithfulness
+- Answer Relevancy: RAGAS AnswerRelevancy
+- Answer Correctness: RAGAS AnswerCorrectness
+- Answer Similarity: RAGAS AnswerSimilarity
+- Aspect Critique: RAGAS AspectCritic（conciseness）
 
 用法：
     evaluator = RAGEvaluator()
@@ -16,6 +20,38 @@ RAGAS 风格评估 —— 四大指标 + LLM-as-Judge + 参数网格搜索
 
 from __future__ import annotations
 
+# ═══════════════════════════════════════════════════════════════
+# 兼容性修复（参考 tests/rag/test_ragas.py）
+# ═══════════════════════════════════════════════════════════════
+# ragas 0.4.3 在 llms/base.py 中导入了
+#   from langchain_community.chat_models.vertexai import ChatVertexAI
+# 但 langchain-community >= 0.3.0 已将该模块独立到 langchain-google-vertexai 包中。
+# 这里在 ragas 导入前注册一个存根模块，避免 ModuleNotFoundError。
+import sys
+from types import ModuleType
+
+try:
+    import langchain_community.chat_models  # noqa: F401
+
+    _parent_file = getattr(langchain_community.chat_models, "__file__", None)
+except ImportError:
+    _parent_file = None
+
+_chat_vertexai = ModuleType("langchain_community.chat_models.vertexai")
+_chat_vertexai.__path__ = [_parent_file or ""]
+_chat_vertexai.__file__ = _parent_file or __file__
+
+
+class ChatVertexAIStub:
+    """存根类，仅用于通过 ragas 的模块加载检查，不会在评估中实际使用。"""
+
+    pass
+
+
+_chat_vertexai.ChatVertexAI = ChatVertexAIStub
+sys.modules["langchain_community.chat_models.vertexai"] = _chat_vertexai
+# ═══════════════════════════════════════════════════════════════
+
 import asyncio
 import json
 import logging
@@ -25,6 +61,20 @@ from pathlib import Path
 from uuid import UUID
 
 import openai
+from datasets import Dataset
+from openai import AsyncOpenAI
+from ragas import evaluate, RunConfig
+from ragas.embeddings import _LangchainEmbeddingsWrapper
+from ragas.llms import llm_factory
+from ragas.metrics import (
+    _AnswerCorrectness,
+    _AnswerRelevancy,
+    _AnswerSimilarity,
+    _AspectCritic,
+    _ContextEntityRecall,
+    _Faithfulness,
+    _LLMContextPrecisionWithReference,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,68 +86,38 @@ from coursepilot.rag.retriever import Retriever
 
 logger = logging.getLogger(__name__)
 
-# ── LLM-as-Judge prompts ──────────────────────────────────────────
 
-JUDGE_CONTEXT_PRECISION_PROMPT = """你是一个严格的评估者。给定一个问题和一段检索到的教材内容，判断这段内容是否对回答该问题有帮助。
-
-问题：{question}
-
-检索到的教材内容：
-{context}
-
-这段内容是否包含可用于回答该问题的信息？只回答 "yes" 或 "no"。"""
-
-JUDGE_FAITHFULNESS_PROMPT = """你是一个严格的评估者。给定一段检索到的教材上下文和一个基于该上下文生成的回答，判断回答中的每个陈述是否都能从上下文中找到依据。
-
-上下文：
-{context}
-
-回答：
-{answer}
-
-请将回答分解为原子性陈述（atomic claims），然后逐一判断每个陈述是否能在上下文中找到支持依据。
-以 JSON 数组格式输出：
-```json
-[
-  {{"claim": "陈述1", "supported": true/false}},
-  {{"claim": "陈述2", "supported": true/false}}
-]
-```
-
-只输出 JSON 数组，不要添加其他文字。"""
-
-JUDGE_ANSWER_RELEVANCY_PROMPT = """你是一个严格的评估者。判断以下回答是否直接且完整地回应了给定的问题。
-
-问题：{question}
-
-回答：{answer}
-
-请从以下维度评分（0-1）：
-- 是否直接回应了问题（而非答非所问）
-- 是否覆盖了问题的核心要点
-- 是否包含不相关的内容
-
-给出一个 0 到 1 之间的分数，只输出数字。"""
-
-
-# ── Data structures ────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# 数据结构
+# ═══════════════════════════════════════════════════════════════
 
 @dataclass
 class EvalResult:
-    """单道题的评估结果"""
+    """单道题的评估结果（RAGAS 8 项指标）"""
+
     question: str
     question_type: str
     kp_path: str
 
     retrieved_uuids: list[str] = field(default_factory=list)
+    retrieved_contexts: list[str] = field(default_factory=list)
     ground_truth_uuids: list[str] = field(default_factory=list)
 
     answer: str = ""
+    ground_truth: str = ""
 
+    # 检索层
     context_recall: float = 0.0
     context_precision: float = 0.0
+    context_entity_recall: float = 0.0
+
+    # 生成层
     faithfulness: float = 0.0
     answer_relevancy: float = 0.0
+    answer_correctness: float = 0.0
+    answer_similarity: float = 0.0
+    aspect_critique: float = 0.0
+
     context_length: int = 0
 
     query_rewritten: str = ""
@@ -110,6 +130,7 @@ class EvalResult:
 @dataclass
 class EvalReport:
     """批量评估报告"""
+
     results: list[EvalResult]
     config: dict
     elapsed_seconds: float = 0.0
@@ -119,58 +140,104 @@ class EvalReport:
         return len(self.results)
 
     @property
-    def avg_context_recall(self) -> float:
-        return _safe_mean(r.context_recall for r in self.results)
-
-    @property
-    def avg_context_precision(self) -> float:
-        return _safe_mean(r.context_precision for r in self.results)
-
-    @property
-    def avg_faithfulness(self) -> float:
-        return _safe_mean(r.faithfulness for r in self.results)
-
-    @property
-    def avg_answer_relevancy(self) -> float:
-        return _safe_mean(r.answer_relevancy for r in self.results)
-
-    @property
-    def avg_context_length(self) -> float:
-        return _safe_mean(r.context_length for r in self.results)
-
-    @property
     def error_count(self) -> int:
         return sum(1 for r in self.results if r.error)
 
+    def _avg(self, getter) -> float:
+        return _safe_mean(getter(r) for r in self.results)
+
+    @property
+    def avg_context_recall(self) -> float:
+        return self._avg(lambda r: r.context_recall)
+
+    @property
+    def avg_context_precision(self) -> float:
+        return self._avg(lambda r: r.context_precision)
+
+    @property
+    def avg_context_entity_recall(self) -> float:
+        return self._avg(lambda r: r.context_entity_recall)
+
+    @property
+    def avg_faithfulness(self) -> float:
+        return self._avg(lambda r: r.faithfulness)
+
+    @property
+    def avg_answer_relevancy(self) -> float:
+        return self._avg(lambda r: r.answer_relevancy)
+
+    @property
+    def avg_answer_correctness(self) -> float:
+        return self._avg(lambda r: r.answer_correctness)
+
+    @property
+    def avg_answer_similarity(self) -> float:
+        return self._avg(lambda r: r.answer_similarity)
+
+    @property
+    def avg_aspect_critique(self) -> float:
+        return self._avg(lambda r: r.aspect_critique)
+
+    @property
+    def avg_context_length(self) -> float:
+        return self._avg(lambda r: r.context_length)
+
+    @property
+    def averages(self) -> dict:
+        """与 to_dict()['averages'] 一致的字典，便于门禁脚本直接使用。"""
+        return {
+            "context_recall": self.avg_context_recall,
+            "context_precision": self.avg_context_precision,
+            "context_entity_recall": self.avg_context_entity_recall,
+            "faithfulness": self.avg_faithfulness,
+            "answer_relevancy": self.avg_answer_relevancy,
+            "answer_correctness": self.avg_answer_correctness,
+            "answer_similarity": self.avg_answer_similarity,
+            "aspect_critique": self.avg_aspect_critique,
+            "context_length": self.avg_context_length,
+        }
+
     def summary(self) -> str:
         lines = [
-            "=" * 60,
+            "=" * 70,
             "RAGAS 评估报告",
-            "=" * 60,
+            "=" * 70,
             f"题目数: {self.count}",
             f"错误数: {self.error_count}",
             f"总耗时: {self.elapsed_seconds:.0f}s",
             f"配置:   {json.dumps(self.config, ensure_ascii=False)}",
             "",
-            f"  Context Recall:      {self.avg_context_recall:.3f}  {'[PASS]' if self.avg_context_recall >= 0.85 else '[FAIL]'}",
-            f"  Context Precision:   {self.avg_context_precision:.3f}",
-            f"  Faithfulness:        {self.avg_faithfulness:.3f}",
-            f"  Answer Relevancy:    {self.avg_answer_relevancy:.3f}",
+            "检索层:",
+            f"  Context Recall:           {self.avg_context_recall:.3f}  {'[PASS]' if self.avg_context_recall >= 0.85 else '[FAIL]'}",
+            f"  Context Precision:        {self.avg_context_precision:.3f}",
+            f"  Context Entity Recall:    {self.avg_context_entity_recall:.3f}",
+            "",
+            "生成层:",
+            f"  Faithfulness:             {self.avg_faithfulness:.3f}",
+            f"  Answer Relevancy:         {self.avg_answer_relevancy:.3f}",
+            f"  Answer Correctness:       {self.avg_answer_correctness:.3f}",
+            f"  Answer Similarity:        {self.avg_answer_similarity:.3f}",
+            f"  Aspect Critique(简洁性):  {self.avg_aspect_critique:.3f}",
             "",
             self._per_question_table(),
-            "=" * 60,
+            "=" * 70,
         ]
         return "\n".join(lines)
 
     def _per_question_table(self) -> str:
-        header = f"  {'#':<3} {'类型':<10} {'Recall':<8} {'Prec':<8} {'Faith':<8} {'Relev':<8} 问题"
+        header = (
+            f"  {'#':<3} {'类型':<10} {'Recall':<7} {'Prec':<7} "
+            f"{'Ent':<7} {'Faith':<7} {'Relev':<7} {'Corr':<7} {'Sim':<7} {'Crit':<7} 问题"
+        )
         rows = [header, "  " + "-" * (len(header) - 2)]
         for i, r in enumerate(self.results):
-            q = r.question[:50]
+            q = r.question[:45]
             rows.append(
                 f"  {i+1:<3} {r.question_type:<10} "
-                f"{r.context_recall:<8.3f} {r.context_precision:<8.3f} "
-                f"{r.faithfulness:<8.3f} {r.answer_relevancy:<8.3f} "
+                f"{r.context_recall:<7.3f} {r.context_precision:<7.3f} "
+                f"{r.context_entity_recall:<7.3f} {r.faithfulness:<7.3f} "
+                f"{r.answer_relevancy:<7.3f} {r.answer_correctness:<7.3f} "
+                f"{r.answer_similarity:<7.3f} {r.aspect_critique:<7.3f} "
                 f"{q}"
             )
             if r.error:
@@ -184,8 +251,12 @@ class EvalReport:
             "averages": {
                 "context_recall": self.avg_context_recall,
                 "context_precision": self.avg_context_precision,
+                "context_entity_recall": self.avg_context_entity_recall,
                 "faithfulness": self.avg_faithfulness,
                 "answer_relevancy": self.avg_answer_relevancy,
+                "answer_correctness": self.avg_answer_correctness,
+                "answer_similarity": self.avg_answer_similarity,
+                "aspect_critique": self.avg_aspect_critique,
                 "context_length": self.avg_context_length,
             },
             "results": [
@@ -195,9 +266,15 @@ class EvalReport:
                     "kp_path": r.kp_path,
                     "context_recall": r.context_recall,
                     "context_precision": r.context_precision,
+                    "context_entity_recall": r.context_entity_recall,
                     "faithfulness": r.faithfulness,
                     "answer_relevancy": r.answer_relevancy,
+                    "answer_correctness": r.answer_correctness,
+                    "answer_similarity": r.answer_similarity,
+                    "aspect_critique": r.aspect_critique,
                     "context_length": r.context_length,
+                    "retrieved_uuids": r.retrieved_uuids,
+                    "ground_truth_uuids": r.ground_truth_uuids,
                     "latency_ms": r.latency_ms,
                     "error": r.error,
                 }
@@ -211,21 +288,29 @@ def _safe_mean(values) -> float:
     return sum(vals) / len(vals) if vals else 0.0
 
 
-# ── Core evaluator ─────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# 核心评估器
+# ═══════════════════════════════════════════════════════════════
 
 class RAGEvaluator:
-    """RAGAS 风格评估器
+    """RAGAS 评估器。
 
-    对黄金数据集逐题执行检索+生成，计算四大指标。
+    对黄金数据集逐题执行检索+生成，使用 RAGAS 库计算 8 项指标。
     支持通过 config_overrides 临时覆盖 RAG 参数（用于网格搜索）。
 
-    所有重型对象（LLM client、Retriever、Generator）在构造时创建并复用，
-    避免每次调用新建连接导致 Milvus/API 连接爆炸。
+    所有重型对象（LLM client、Retriever、Generator、RAGAS 客户端）
+    在构造时创建并复用，避免每次调用新建连接导致 Milvus/API 连接爆炸。
     """
 
-    def __init__(self, config_overrides: dict | None = None):
+    def __init__(
+        self,
+        config_overrides: dict | None = None,
+        *,
+        use_mimo: bool = True,
+    ):
         self.overrides = config_overrides or {}
         self._original_config = {}
+        self.use_mimo = use_mimo
 
         # 复用单例，避免重复创建连接
         self.retriever = Retriever()
@@ -235,8 +320,89 @@ class RAGEvaluator:
             base_url=settings.llm_base_url,
         )
 
+        # RAGAS 评估客户端（MiMO）
+        self._ragas_llm = None
+        self._ragas_embeddings = None
+        self._metrics = []
+        self._init_ragas_clients()
+
+    def _init_ragas_clients(self) -> None:
+        """初始化 RAGAS 所需的 LLM 与 Embeddings 客户端。"""
+        if not self.use_mimo:
+            print("[eval] 使用默认 LLM 作为 RAGAS judge 模型")
+            api_key = settings.llm_api_key
+            base_url = settings.llm_base_url
+            model = settings.llm_model
+        else:
+            api_key = settings.mimo_api_key
+            base_url = settings.mimo_base_url
+            model = settings.mimo_model
+            print(f"[eval] 使用 MiMO 作为 RAGAS judge 模型: {model}")
+
+        if not api_key or not base_url or not model:
+            raise ValueError(
+                "RAGAS judge 配置不完整，请检查 .env 中的 "
+                "MIMO_API_KEY / MIMO_BASE_URL / MIMO_MODEL（或 LLM 对应配置）"
+            )
+
+        # RAGAS 0.4.3 的 llm_factory 接受 openai client，返回 InstructorLLM
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._ragas_llm = llm_factory(model, client=client)
+
+        # embeddings：默认使用本地 BGE-M3，避免依赖 MiMO 的 embedding 接口
+        # 因为实测 MiMO 对 /embeddings 返回 404。
+        try:
+            from langchain_community.embeddings import HuggingFaceEmbeddings
+
+            lc_emb = HuggingFaceEmbeddings(
+                model_name=settings.embedding_model_path,
+                model_kwargs={"device": "cpu"},
+                encode_kwargs={"normalize_embeddings": True},
+            )
+            self._ragas_embeddings = _LangchainEmbeddingsWrapper(lc_emb)
+            print(
+                f"[eval] RAGAS embeddings 使用本地模型: {settings.embedding_model_path}"
+            )
+        except Exception as e:
+            print(f"[eval] [WARN] RAGAS embeddings 初始化失败: {e}")
+            self._ragas_embeddings = None
+
+        self._metrics = self._build_metrics()
+
+    def _build_metrics(self) -> list:
+        """构造 RAGAS 评估指标列表。"""
+        metrics = [
+            _Faithfulness(llm=self._ragas_llm),
+            _LLMContextPrecisionWithReference(llm=self._ragas_llm),
+            _ContextEntityRecall(llm=self._ragas_llm),
+        ]
+
+        if self._ragas_embeddings:
+            metrics.extend(
+                [
+                    _AnswerRelevancy(
+                        llm=self._ragas_llm, embeddings=self._ragas_embeddings
+                    ),
+                    _AnswerCorrectness(
+                        llm=self._ragas_llm, embeddings=self._ragas_embeddings
+                    ),
+                    _AnswerSimilarity(embeddings=self._ragas_embeddings),
+                ]
+            )
+        else:
+            print("[eval] [WARN] 无 embeddings，跳过 AnswerRelevancy/AnswerCorrectness/AnswerSimilarity")
+
+        metrics.append(
+            _AspectCritic(
+                name="conciseness",
+                definition="答案是否简洁，无冗余信息",
+                llm=self._ragas_llm,
+            )
+        )
+        return metrics
+
     def _apply_overrides(self):
-        """临时覆盖 RAG 配置参数，保存原始值用于恢复"""
+        """临时覆盖 RAG 配置参数，保存原始值用于恢复。"""
         self._original_config = {}
         for key, value in self.overrides.items():
             if hasattr(rag_config, key):
@@ -244,11 +410,13 @@ class RAGEvaluator:
                 setattr(rag_config, key, value)
 
     def _restore_config(self):
-        """恢复被覆盖的 RAG 配置参数"""
+        """恢复被覆盖的 RAG 配置参数。"""
         for key, value in self._original_config.items():
             setattr(rag_config, key, value)
 
-    # ── 检索 + UUID 收集 ──────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════
+    # 检索 + UUID 收集
+    # ═══════════════════════════════════════════════════════════
 
     async def _retrieve_with_uuids(
         self,
@@ -256,22 +424,21 @@ class RAGEvaluator:
         query: str,
         course_id: str,
     ) -> tuple[str, dict, list[str]]:
-        """执行检索并返回 (context, metadata, all_retrieved_uuids)
+        """执行检索并返回 (context, metadata, all_retrieved_uuids)。
 
         all_retrieved_uuids 取 metadata 中的 context_uuids（精准反映最终上下文内容），
         不再回查 DB 中对应 KP 下的全部 unit，确保 baseline / kp_full / kp_neighbor
         三种策略的 recall 计算准确可比。
         """
-        context, metadata = await self.retriever.retrieve(
-            session, query, course_id
-        )
-
+        context, metadata = await self.retriever.retrieve(session, query, course_id)
         all_uuids = metadata.get("context_uuids", [])
         return context, metadata, all_uuids
 
-    # ── 单题评估 ──────────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════
+    # 单题准备
+    # ═══════════════════════════════════════════════════════════
 
-    async def evaluate_single(
+    async def _prepare_result(
         self,
         session: AsyncSession,
         question: dict,
@@ -279,7 +446,7 @@ class RAGEvaluator:
         *,
         skip_generation: bool = False,
     ) -> EvalResult:
-        """评估单道题，返回 EvalResult"""
+        """准备单道题的 EvalResult（检索 + 生成，不含 RAGAS 打分）。"""
         t0 = time.monotonic()
 
         gt_uuids = question.get("ground_truth_contexts", [])
@@ -289,6 +456,7 @@ class RAGEvaluator:
             question_type=question.get("question_type", ""),
             kp_path=question.get("kp_path", ""),
             ground_truth_uuids=gt_uuids,
+            ground_truth=question.get("ground_truth", question.get("answer", "")),
         )
 
         try:
@@ -299,11 +467,12 @@ class RAGEvaluator:
                 session, question["question"], course_id
             )
             result.retrieved_uuids = all_uuids
+            result.retrieved_contexts = await self._load_units(session, all_uuids)
             result.query_rewritten = metadata.get("query_rewritten", "")
             result.top_kp_paths = metadata.get("source_kp_paths", [])
             result.candidate_count = metadata.get("candidate_count", 0)
 
-            # 2) Context Recall（确定性）+ 上下文长度
+            # 2) Context Recall（基于 UUID 的客观指标）
             result.context_recall = self._compute_context_recall(
                 gt_uuids, all_uuids
             )
@@ -317,36 +486,18 @@ class RAGEvaluator:
                 result.answer, _ = await self.generator.generate(
                     question["question"], context, course_context
                 )
-                print(f"[eval] LLM 生成完成, 耗时={(time.monotonic()-t_gen)*1000:.0f}ms, answer_chars={len(result.answer)}")
+                print(
+                    f"[eval] LLM 生成完成, 耗时={(time.monotonic()-t_gen)*1000:.0f}ms, "
+                    f"answer_chars={len(result.answer)}"
+                )
             elif not context:
                 result.answer = ""
                 result.error = "检索上下文为空"
 
-            # 4) LLM-as-Judge 指标
-            #    Context Precision 无需生成回答，独立计算（支持 skip_generation 场景）
-            top_kp_ids = metadata.get("top_kp_ids", [])
-            if top_kp_ids and context:
-                print("[eval] LLM-as-Judge Context Precision 评估开始...")
-                t_judge = time.monotonic()
-                result.context_precision = await self._judge_context_precision(
-                    question["question"], top_kp_ids, session
-                )
-                print(f"[eval] Context Precision 完成, 耗时={(time.monotonic()-t_judge)*1000:.0f}ms")
-            #    Faithfulness & Answer Relevancy 依赖生成
-            if result.answer and context:
-                t_judge2 = time.monotonic()
-                result.faithfulness = await self._judge_faithfulness(
-                    result.answer, context
-                )
-                result.answer_relevancy = await self._judge_answer_relevancy(
-                    question["question"], result.answer
-                )
-                print(f"[eval] Faithfulness+Relevancy 完成, 耗时={(time.monotonic()-t_judge2)*1000:.0f}ms")
-
         except Exception as e:
             result.error = str(e)
             logger.error(
-                "评估失败 [%s...]: %s", question["question"][:50], e
+                "准备题目失败 [%s...]: %s", question["question"][:50], e
             )
 
         finally:
@@ -355,7 +506,31 @@ class RAGEvaluator:
         result.latency_ms = (time.monotonic() - t0) * 1000
         return result
 
-    # ── 批量评估 ──────────────────────────────────────────────
+    async def evaluate_single(
+        self,
+        session: AsyncSession,
+        question: dict,
+        course_id: str,
+        *,
+        skip_generation: bool = False,
+    ) -> EvalResult:
+        """评估单道题，返回 EvalResult。"""
+        print(f"\n{'='*40}\n[eval] 单题评估: {question['question'][:60]}\n{'='*40}")
+        result = await self._prepare_result(
+            session, question, course_id, skip_generation=skip_generation
+        )
+        scores = self._run_ragas([result])[0]
+        self._merge_ragas_scores(result, scores)
+        print(
+            f"[eval] 单题完成: recall={result.context_recall:.3f}, "
+            f"faithfulness={result.faithfulness:.3f}, "
+            f"latency={result.latency_ms:.0f}ms, error={result.error!r}"
+        )
+        return result
+
+    # ═══════════════════════════════════════════════════════════
+    # 批量评估
+    # ═══════════════════════════════════════════════════════════
 
     async def evaluate_dataset(
         self,
@@ -364,7 +539,7 @@ class RAGEvaluator:
         *,
         skip_generation: bool = False,
     ) -> EvalReport:
-        """加载黄金数据集并逐题评估"""
+        """加载黄金数据集并逐题评估。"""
         path = Path(dataset_path)
         if not path.exists():
             raise FileNotFoundError(f"数据集不存在: {path}")
@@ -377,20 +552,38 @@ class RAGEvaluator:
         if not course_id:
             raise ValueError("数据集中缺少 course_id")
 
+        print(f"[eval] 加载数据集: {path}, 共 {len(questions)} 题")
+        print(f"[eval] 跳过生成: {skip_generation}")
+
         t0 = time.monotonic()
         results: list[EvalResult] = []
 
         for i, q in enumerate(questions):
-            print(f"\n{'='*40}\n[eval] [{i+1}/{len(questions)}] {q['question'][:60]}\n{'='*40}")
+            print(
+                f"\n{'='*40}\n[eval] [{i+1}/{len(questions)}] {q['question'][:60]}\n{'='*40}"
+            )
             logger.info("[%d/%d] 评估: %s", i + 1, len(questions), q["question"][:60])
-            r = await self.evaluate_single(
+            r = await self._prepare_result(
                 session, q, course_id, skip_generation=skip_generation
             )
-            print(f"[eval] 第{i+1}题完成: recall={r.context_recall:.3f}, latency={r.latency_ms:.0f}ms, error={r.error!r}")
             results.append(r)
+            print(
+                f"[eval] 第{i+1}题准备完成: recall={r.context_recall:.3f}, "
+                f"latency={r.latency_ms:.0f}ms, error={r.error!r}"
+            )
             # 题间短暂延迟，避免打爆 Milvus 和 LLM API
-            print(f"[eval] 题间休眠 1s...")
+            print("[eval] 题间休眠 1s...")
             await asyncio.sleep(1.0)
+
+        # 批量 RAGAS 评分
+        print("\n[eval] 开始批量 RAGAS 评分...")
+        t_ragas = time.monotonic()
+        all_scores = self._run_ragas(results)
+        for r, scores in zip(results, all_scores):
+            self._merge_ragas_scores(r, scores)
+        print(
+            f"[eval] RAGAS 评分完成, 耗时={(time.monotonic()-t_ragas)*1000:.0f}ms"
+        )
 
         elapsed = time.monotonic() - t0
         report = EvalReport(
@@ -400,139 +593,128 @@ class RAGEvaluator:
         )
         return report
 
-    # ── 四大指标 ──────────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════
+    # RAGAS 评分
+    # ═══════════════════════════════════════════════════════════
+
+    def _run_ragas(self, results: list[EvalResult]) -> list[dict]:
+        """对一批 EvalResult 执行 RAGAS 批量评分。
+
+        返回与 results 等长的 list[dict]，每个 dict 包含 7 项 RAGAS 指标分数；
+        无法评估的题目对应空 dict。
+        """
+        rows: list[dict] = []
+        valid_indices: list[int] = []
+
+        for i, r in enumerate(results):
+            if r.error or not r.retrieved_contexts:
+                continue
+            rows.append(
+                {
+                    "question": r.question,
+                    "contexts": r.retrieved_contexts,
+                    "answer": r.answer or "",
+                    "ground_truth": r.ground_truth,
+                }
+            )
+            valid_indices.append(i)
+
+        if not rows:
+            print("[eval] [WARN] 没有有效题目可供 RAGAS 评分")
+            return [{} for _ in results]
+
+        dataset = Dataset.from_list(rows)
+        print(f"[eval] RAGAS 输入: {len(rows)} 题, metrics={len(self._metrics)}")
+
+        try:
+            ragas_result = evaluate(
+                dataset=dataset,
+                metrics=self._metrics,
+                llm=self._ragas_llm,
+                embeddings=self._ragas_embeddings,
+                run_config=RunConfig(),
+                raise_exceptions=False,
+            )
+            df = ragas_result.to_pandas()
+        except Exception as e:
+            logger.error("RAGAS 批量评估失败: %s", e)
+            print(f"[eval] [ERROR] RAGAS 批量评估失败: {e}")
+            return [{} for _ in results]
+
+        scores_list: list[dict] = []
+        for _, row in df.iterrows():
+            scores_list.append(
+                {
+                    "context_precision": _to_float(
+                        row.get("llm_context_precision_with_reference")
+                    ),
+                    "context_entity_recall": _to_float(
+                        row.get("context_entity_recall")
+                    ),
+                    "faithfulness": _to_float(row.get("faithfulness")),
+                    "answer_relevancy": _to_float(row.get("answer_relevancy")),
+                    "answer_correctness": _to_float(row.get("answer_correctness")),
+                    "answer_similarity": _to_float(row.get("answer_similarity")),
+                    "aspect_critique": _to_float(row.get("conciseness")),
+                }
+            )
+
+        final_scores: list[dict] = [{} for _ in results]
+        for idx, scores in zip(valid_indices, scores_list):
+            final_scores[idx] = scores
+        return final_scores
+
+    @staticmethod
+    def _merge_ragas_scores(result: EvalResult, scores: dict) -> None:
+        """将 RAGAS 分数合并到 EvalResult。"""
+        if not scores:
+            return
+        result.context_precision = scores.get("context_precision", 0.0)
+        result.context_entity_recall = scores.get("context_entity_recall", 0.0)
+        result.faithfulness = scores.get("faithfulness", 0.0)
+        result.answer_relevancy = scores.get("answer_relevancy", 0.0)
+        result.answer_correctness = scores.get("answer_correctness", 0.0)
+        result.answer_similarity = scores.get("answer_similarity", 0.0)
+        result.aspect_critique = scores.get("aspect_critique", 0.0)
+
+    # ═══════════════════════════════════════════════════════════
+    # 指标计算辅助
+    # ═══════════════════════════════════════════════════════════
 
     @staticmethod
     def _compute_context_recall(
         ground_truth: list[str], retrieved: list[str]
     ) -> float:
-        """Context Recall = |ground_truth ∩ retrieved| / |ground_truth|"""
+        """Context Recall = |ground_truth ∩ retrieved| / |ground_truth|。"""
         if not ground_truth:
             return 1.0
         gt_set = set(ground_truth)
         ret_set = set(retrieved)
         return len(gt_set & ret_set) / len(gt_set)
 
-    async def _judge_context_precision(
-        self, question: str, top_kp_ids: list[str], session: AsyncSession
-    ) -> float:
-        """LLM-as-Judge: KP 级判定，用关键词粗排选最相关 unit 后 judge"""
-        if not top_kp_ids:
-            return 0.0
-
-        import re as _re
-        q_tokens = set(_re.findall(r"[一-鿿]+|[a-zA-Z0-9]+", question.lower()))
-
-        kp_ids = top_kp_ids[:5]
-        relevant_kps = 0
-
-        for kp_id in kp_ids:
-            units = await self._load_units_by_kp(session, kp_id)
-            if not units:
-                continue
-
-            # 关键词粗排：对每个 unit 算 Jaccard 重叠，取 top-8 拼接
-            scored: list[tuple[str, float]] = []
-            for content in units:
-                u_tokens = set(_re.findall(r"[一-鿿]+|[a-zA-Z0-9]+", content.lower()))
-                if u_tokens and q_tokens:
-                    score = len(q_tokens & u_tokens) / len(q_tokens | u_tokens)
-                else:
-                    score = 0.0
-                scored.append((content, score))
-            scored.sort(key=lambda x: x[1], reverse=True)
-            combined = "\n\n".join(c[:500] for c, _ in scored[:8])[:3000]
-
-            if not combined.strip():
-                continue
-            try:
-                answer = await self._llm_judge(
-                    JUDGE_CONTEXT_PRECISION_PROMPT.format(
-                        question=question, context=combined
-                    ),
-                    max_tokens=5,
-                )
-                if answer.strip().lower().startswith("yes"):
-                    relevant_kps += 1
-            except Exception:
-                relevant_kps += 1
-
-        return relevant_kps / len(kp_ids)
-
-    async def _judge_faithfulness(
-        self, answer: str, context: str
-    ) -> float:
-        """LLM-as-Judge: 回答中的陈述是否能从上下文中找到依据"""
-        prompt = JUDGE_FAITHFULNESS_PROMPT.format(
-            context=context[:6000], answer=answer
-        )
-        try:
-            raw = await self._llm_judge(prompt, max_tokens=1024)
-            claims = _parse_json_array(raw)
-            if not claims:
-                return 0.0
-            supported = sum(1 for c in claims if c.get("supported", False))
-            return supported / len(claims)
-        except Exception:
-            return 0.0
-
-    async def _judge_answer_relevancy(
-        self, question: str, answer: str
-    ) -> float:
-        """LLM-as-Judge: 回答是否切题"""
-        prompt = JUDGE_ANSWER_RELEVANCY_PROMPT.format(
-            question=question, answer=answer[:2000]
-        )
-        try:
-            raw = await self._llm_judge(prompt, max_tokens=10)
-            score = float(raw.strip())
-            return max(0.0, min(1.0, score))
-        except Exception:
-            return 0.0
-
-    # ── 工具方法 ──────────────────────────────────────────────
-
-    async def _llm_judge(self, prompt: str, max_tokens: int = 256) -> str:
-        """调用 DeepSeek 执行 LLM-as-Judge（复用共享 client）"""
-        response = await self.llm_client.chat.completions.create(
-            model=settings.llm_model,
-            messages=[
-                {"role": "system", "content": "你是一个严格的评估者。请严格按要求回答。"},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.0,
-            max_tokens=max_tokens,
-            extra_body={"thinking": {"type": "disabled"}},
-        )
-        return response.choices[0].message.content or ""
+    # ═══════════════════════════════════════════════════════════
+    # 工具方法
+    # ═══════════════════════════════════════════════════════════
 
     @staticmethod
     async def _load_units(
         session: AsyncSession, uuids: list[str]
     ) -> list[str]:
-        """按 UUID 批量加载 KnowledgeUnit 内容"""
+        """按 UUID 批量加载 KnowledgeUnit 内容。"""
+        if not uuids:
+            return []
         result = await session.execute(
-            select(KnowledgeUnit.content)
-            .where(KnowledgeUnit.id.in_([UUID(uid) for uid in uuids]))
-        )
-        return [row[0] for row in result.all() if row[0]]
-
-    @staticmethod
-    async def _load_units_by_kp(
-        session: AsyncSession, kp_id: str
-    ) -> list[str]:
-        """按 KP ID 加载全部 unit 内容"""
-        result = await session.execute(
-            select(KnowledgeUnit.content)
-            .where(KnowledgeUnit.kp_id == UUID(kp_id))
+            select(KnowledgeUnit.content).where(
+                KnowledgeUnit.id.in_([UUID(uid) for uid in uuids])
+            )
         )
         return [row[0] for row in result.all() if row[0]]
 
     def _current_config_snapshot(self) -> dict:
-        """当前 RAG 配置快照（便于报告记录）"""
+        """当前 RAG 配置快照（便于报告记录）。"""
         return {
             "rrf_k": rag_config.rrf_k,
-            "rrf_weights": list(getattr(rag_config, "rrf_weights", [1.0, 1.0])),
+            "dense_weight": getattr(rag_config, "dense_weight", None),
             "rerank_top_k": rag_config.rerank_top_k,
             "context_max_chars": rag_config.context_max_chars,
             "dense_top_k": rag_config.dense_top_k,
@@ -543,32 +725,18 @@ class RAGEvaluator:
             "enable_kp_expand": rag_config.enable_kp_expand,
             "kp_expand_mode": getattr(rag_config, "kp_expand_mode", "full"),
             "kp_neighbor_window": getattr(rag_config, "kp_neighbor_window", 2),
+            "level_penalty": rag_config.level_penalty,
         }
 
 
-def _parse_json_array(raw: str) -> list[dict]:
-    """从 LLM 回复中提取 JSON 数组"""
-    import re
-
-    raw = raw.strip()
-    # 尝试直接解析
+def _to_float(value) -> float:
+    """将 RAGAS 输出值安全转换为 0-1 浮点数。"""
+    if value is None:
+        return 0.0
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-    # 尝试提取 markdown code block 中的 JSON
-    m = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", raw, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
-    # 尝试提取 [...]
-    m = re.search(r"\[.*\]", raw, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group())
-        except json.JSONDecodeError:
-            pass
-    logger.warning("无法解析 LLM judge 输出: %.200s", raw)
-    return []
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if f != f:  # NaN
+        return 0.0
+    return max(0.0, min(1.0, f))

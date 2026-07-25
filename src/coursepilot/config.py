@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com"
     llm_temperature: float = 0.3
 
+    # ── MiMO Judge ─────────────────────────────────────
+    mimo_api_key: str = ""
+    mimo_model: str = "mimo-v2.5-pro"
+    mimo_base_url: str = "https://api.xiaomimimo.com/v1"
+    mimo_embedding_model: str = "text-embedding-ada-002"
+
     # ── 上下文窗口预算（ContextManager 使用）───────────────
     llm_context_budget: dict = {
         "total_tokens": 64_000,

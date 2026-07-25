@@ -17,20 +17,20 @@ class RAGConfig:
 
     # == 阈值
     reranker_min_score: float = 0.3  # 低于此分的 source 直接丢弃
-    context_max_chars: int = 8000  # 送入 LLM 的上下文软上限
+    context_max_chars: int = 6000  # 送入 LLM 的上下文软上限
 
     # == 检索参数
     dense_top_k: int = 20  # dense 检索返回条数
     sparse_top_k: int = 20  # sparse 检索返回条数
     rrf_k: int = 60  # RRF 融合参数
-    rrf_weights: tuple[float, ...] = (1.5, 1.0)  # RRF 各来源权重 [Milvus, BM25]
+    dense_weight: float = 0.5  # dense 检索在 RRF 中的权重（0~1），sparse 权重自动为 1-dense_weight
     rerank_top_k: int = 5  # 重排序后最终送入 LLM 的条数
 
     # == BM25 参数
     enable_bm25: bool = True  # 关闭 → 只用 Milvus 混合检索
     bm25_top_k: int = 20  # BM25 检索返回条数（与 Milvus top_k 对等）
     bm25_cache_ttl: int = 600  # BM25 索引缓存 TTL（秒）
-    level_penalty: float = 0.1  # 层级不匹配惩罚系数（设计中 0.02/级，这里统一为 max 0.1）
+    level_penalty: float = 0.0  # 层级不匹配惩罚系数（网格搜索默认起点）
 
     # == 编码参数
     batch_size: int = 32  # BGE-M3 编码 batch size
