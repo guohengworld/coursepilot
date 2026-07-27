@@ -14,7 +14,7 @@ RAGAS 评估核心 —— 基于 RAGAS 库计算 8 项指标。
 用法：
     evaluator = RAGEvaluator()
     async with get_session_etx() as session:
-        report = await evaluator.evaluate_dataset(session, "eval/questions/eval_questions.json")
+        report = await evaluator.evaluate_dataset(session, "eval/questions/20260726/eval_questions.json")
     print(report.summary())
 """
 
@@ -53,6 +53,7 @@ sys.modules["langchain_community.chat_models.vertexai"] = _chat_vertexai
 # ═══════════════════════════════════════════════════════════════
 
 import asyncio
+import httpx
 import json
 import logging
 import time
@@ -144,7 +145,8 @@ class EvalReport:
         return sum(1 for r in self.results if r.error)
 
     def _avg(self, getter) -> float:
-        return _safe_mean(getter(r) for r in self.results)
+        valid = [r for r in self.results if r.question_type != "unanswerable"]
+        return _safe_mean(getter(r) for r in valid)
 
     @property
     def avg_context_recall(self) -> float:
@@ -275,6 +277,9 @@ class EvalReport:
                     "context_length": r.context_length,
                     "retrieved_uuids": r.retrieved_uuids,
                     "ground_truth_uuids": r.ground_truth_uuids,
+                    "query_rewritten": r.query_rewritten,
+                    "top_kp_paths": r.top_kp_paths,
+                    "candidate_count": r.candidate_count,
                     "latency_ms": r.latency_ms,
                     "error": r.error,
                 }
@@ -307,10 +312,16 @@ class RAGEvaluator:
         config_overrides: dict | None = None,
         *,
         use_mimo: bool = True,
+        ragas_max_tokens: int = 4096,
+        ragas_timeout: float = 120.0,
+        ragas_max_workers: int = 4,       # 从 2 提升到 4（HTTP/1.1 + 无 keepalive）
     ):
         self.overrides = config_overrides or {}
         self._original_config = {}
         self.use_mimo = use_mimo
+        self.ragas_max_tokens = ragas_max_tokens
+        self.ragas_timeout = ragas_timeout
+        self.ragas_max_workers = ragas_max_workers
 
         # 复用单例，避免重复创建连接
         self.retriever = Retriever()
@@ -320,11 +331,18 @@ class RAGEvaluator:
             base_url=settings.llm_base_url,
         )
 
-        # RAGAS 评估客户端（MiMO）
+        # RAGAS 评估客户端（延迟初始化，仅 rag-only=False 时加载）
         self._ragas_llm = None
         self._ragas_embeddings = None
         self._metrics = []
+        self._ragas_inited = False
+
+    def _ensure_ragas_clients(self) -> None:
+        """确保 RAGAS 客户端已初始化（惰性加载）。"""
+        if self._ragas_inited:
+            return
         self._init_ragas_clients()
+        self._ragas_inited = True
 
     def _init_ragas_clients(self) -> None:
         """初始化 RAGAS 所需的 LLM 与 Embeddings 客户端。"""
@@ -336,7 +354,8 @@ class RAGEvaluator:
         else:
             api_key = settings.mimo_api_key
             base_url = settings.mimo_base_url
-            model = settings.mimo_model
+            # 改用 mimo-v2.5（非 pro）控制成本
+            model = "mimo-v2.5"
             print(f"[eval] 使用 MiMO 作为 RAGAS judge 模型: {model}")
 
         if not api_key or not base_url or not model:
@@ -345,9 +364,34 @@ class RAGEvaluator:
                 "MIMO_API_KEY / MIMO_BASE_URL / MIMO_MODEL（或 LLM 对应配置）"
             )
 
+        # ── 创建 RAGAS LLM client ────────────────────────────
+        # 彻底关闭 keepalive（max_keepalive_connections=0），每次请求新建连接，
+        # 避免本地代理（127.0.0.1:13330）的 gRPC keepalive 触发 too_many_pings。
+        # trust_env=False 跳过 HTTP_PROXY/HTTPS_PROXY 环境变量，尝试直连。
+        transport = httpx.AsyncHTTPTransport(
+            limits=httpx.Limits(
+                max_keepalive_connections=0,
+                keepalive_expiry=0,
+            ),
+            trust_env=False,
+        )
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=httpx.Timeout(self.ragas_timeout, connect=30.0),
+            max_retries=3,
+            http_client=httpx.AsyncClient(
+                transport=transport,
+                http1=True,
+                http2=False,         # 强制 HTTP/1.1，无 gRPC
+            ),
+        )
+
         # RAGAS 0.4.3 的 llm_factory 接受 openai client，返回 InstructorLLM
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        self._ragas_llm = llm_factory(model, client=client)
+        self._ragas_llm = llm_factory(
+            model, client=client,
+            max_tokens=self.ragas_max_tokens,
+        )
 
         # embeddings：默认使用本地 BGE-M3，避免依赖 MiMO 的 embedding 接口
         # 因为实测 MiMO 对 /embeddings 返回 404。
@@ -370,7 +414,7 @@ class RAGEvaluator:
         self._metrics = self._build_metrics()
 
     def _build_metrics(self) -> list:
-        """构造 RAGAS 评估指标列表。"""
+        """构造 RAGAS 官方评估指标列表。"""
         metrics = [
             _Faithfulness(llm=self._ragas_llm),
             _LLMContextPrecisionWithReference(llm=self._ragas_llm),
@@ -445,6 +489,7 @@ class RAGEvaluator:
         course_id: str,
         *,
         skip_generation: bool = False,
+        _cached_course_context: dict | None = None,
     ) -> EvalResult:
         """准备单道题的 EvalResult（检索 + 生成，不含 RAGAS 打分）。"""
         t0 = time.monotonic()
@@ -461,6 +506,14 @@ class RAGEvaluator:
 
         try:
             self._apply_overrides()
+
+            # 检测不可回答问题：不检索、不生成，直接返回标准答案
+            if question.get("question_type") == "unanswerable" or question.get("unanswerable"):
+                print("[eval] 检测到不可回答问题，跳过检索与生成")
+                result.answer = question.get("ground_truth",
+                                              question.get("answer", "教材未涉及此内容，无法回答"))
+                result.latency_ms = (time.monotonic() - t0) * 1000
+                return result
 
             # 1) 检索
             context, metadata, all_uuids = await self._retrieve_with_uuids(
@@ -482,7 +535,10 @@ class RAGEvaluator:
             if not skip_generation and context:
                 print("[eval] 调用 LLM 生成回答...")
                 t_gen = time.monotonic()
-                course_context = await build_course_context(session, course_id)
+                if _cached_course_context is not None:
+                    course_context = _cached_course_context
+                else:
+                    course_context = await build_course_context(session, course_id)
                 result.answer, _ = await self.generator.generate(
                     question["question"], context, course_context
                 )
@@ -519,7 +575,7 @@ class RAGEvaluator:
         result = await self._prepare_result(
             session, question, course_id, skip_generation=skip_generation
         )
-        scores = self._run_ragas([result])[0]
+        scores = (await self._run_ragas([result]))[0]
         self._merge_ragas_scores(result, scores)
         print(
             f"[eval] 单题完成: recall={result.context_recall:.3f}, "
@@ -538,8 +594,14 @@ class RAGEvaluator:
         dataset_path: str | Path,
         *,
         skip_generation: bool = False,
+        skip_ragas: bool = False,
     ) -> EvalReport:
-        """加载黄金数据集并逐题评估。"""
+        """加载黄金数据集并逐题评估。
+
+        Args:
+            skip_generation: 跳过 LLM 生成（同时自动跳过 RAGAS 评分）
+            skip_ragas: 执行 LLM 生成但跳过 RAGAS 评分（仅保存问答结果）
+        """
         path = Path(dataset_path)
         if not path.exists():
             raise FileNotFoundError(f"数据集不存在: {path}")
@@ -552,11 +614,19 @@ class RAGEvaluator:
         if not course_id:
             raise ValueError("数据集中缺少 course_id")
 
+        # skip_generation 时强制跳过 RAGAS
+        if skip_generation:
+            skip_ragas = True
+
         print(f"[eval] 加载数据集: {path}, 共 {len(questions)} 题")
-        print(f"[eval] 跳过生成: {skip_generation}")
+        print(f"[eval] 跳过生成: {skip_generation}, 跳过 RAGAS: {skip_ragas}")
 
         t0 = time.monotonic()
         results: list[EvalResult] = []
+
+        # 缓存 course_context，所有题共享（同一 course_id）
+        course_context_cached = await build_course_context(session, course_id) if not skip_generation else {}
+        print(f"[eval] 课程上下文已缓存: {list(course_context_cached.keys()) if course_context_cached else '{}'}")
 
         for i, q in enumerate(questions):
             print(
@@ -564,26 +634,27 @@ class RAGEvaluator:
             )
             logger.info("[%d/%d] 评估: %s", i + 1, len(questions), q["question"][:60])
             r = await self._prepare_result(
-                session, q, course_id, skip_generation=skip_generation
+                session, q, course_id, skip_generation=skip_generation,
+                _cached_course_context=course_context_cached,
             )
             results.append(r)
             print(
                 f"[eval] 第{i+1}题准备完成: recall={r.context_recall:.3f}, "
                 f"latency={r.latency_ms:.0f}ms, error={r.error!r}"
             )
-            # 题间短暂延迟，避免打爆 Milvus 和 LLM API
-            print("[eval] 题间休眠 1s...")
-            await asyncio.sleep(1.0)
 
-        # 批量 RAGAS 评分
-        print("\n[eval] 开始批量 RAGAS 评分...")
-        t_ragas = time.monotonic()
-        all_scores = self._run_ragas(results)
-        for r, scores in zip(results, all_scores):
-            self._merge_ragas_scores(r, scores)
-        print(
-            f"[eval] RAGAS 评分完成, 耗时={(time.monotonic()-t_ragas)*1000:.0f}ms"
-        )
+        # 批量 RAGAS 评分（仅非 rag-only 模式）
+        if not skip_ragas:
+            print("\n[eval] 开始批量 RAGAS 评分...")
+            t_ragas = time.monotonic()
+            all_scores = await self._run_ragas(results)
+            for r, scores in zip(results, all_scores):
+                self._merge_ragas_scores(r, scores)
+            print(
+                f"[eval] RAGAS 评分完成, 耗时={(time.monotonic()-t_ragas)*1000:.0f}ms"
+            )
+        else:
+            print("[eval] 跳过 RAGAS 评分（rag-only 模式）")
 
         elapsed = time.monotonic() - t0
         report = EvalReport(
@@ -597,7 +668,7 @@ class RAGEvaluator:
     # RAGAS 评分
     # ═══════════════════════════════════════════════════════════
 
-    def _run_ragas(self, results: list[EvalResult]) -> list[dict]:
+    async def _run_ragas(self, results: list[EvalResult]) -> list[dict]:
         """对一批 EvalResult 执行 RAGAS 批量评分。
 
         返回与 results 等长的 list[dict]，每个 dict 包含 7 项 RAGAS 指标分数；
@@ -623,16 +694,24 @@ class RAGEvaluator:
             print("[eval] [WARN] 没有有效题目可供 RAGAS 评分")
             return [{} for _ in results]
 
+        # 惰性加载 RAGAS 客户端（加载模型可能需要时间）
+        self._ensure_ragas_clients()
+
         dataset = Dataset.from_list(rows)
         print(f"[eval] RAGAS 输入: {len(rows)} 题, metrics={len(self._metrics)}")
 
         try:
+            # 降低并发 worker 数，减少 HTTP/2 ping 频率和服务端限流概率
+            run_config = RunConfig(
+                max_workers=self.ragas_max_workers,
+                timeout=self.ragas_timeout,
+            )
             ragas_result = evaluate(
                 dataset=dataset,
                 metrics=self._metrics,
                 llm=self._ragas_llm,
                 embeddings=self._ragas_embeddings,
-                run_config=RunConfig(),
+                run_config=run_config,
                 raise_exceptions=False,
             )
             df = ragas_result.to_pandas()
@@ -662,6 +741,7 @@ class RAGEvaluator:
         final_scores: list[dict] = [{} for _ in results]
         for idx, scores in zip(valid_indices, scores_list):
             final_scores[idx] = scores
+
         return final_scores
 
     @staticmethod
@@ -677,9 +757,7 @@ class RAGEvaluator:
         result.answer_similarity = scores.get("answer_similarity", 0.0)
         result.aspect_critique = scores.get("aspect_critique", 0.0)
 
-    # ═══════════════════════════════════════════════════════════
-    # 指标计算辅助
-    # ═══════════════════════════════════════════════════════════
+
 
     @staticmethod
     def _compute_context_recall(
@@ -711,8 +789,12 @@ class RAGEvaluator:
         return [row[0] for row in result.all() if row[0]]
 
     def _current_config_snapshot(self) -> dict:
-        """当前 RAG 配置快照（便于报告记录）。"""
-        return {
+        """当前 RAG 配置快照（读取 rag_config 当前值 + 合并实际生效的 overrides）。
+
+        注意：快照在 _restore_config() 之后采集，所以 rag_config 已被复原。
+        必须将 self.overrides 合并上去，才能反映本次评估实际使用的参数。
+        """
+        snapshot = {
             "rrf_k": rag_config.rrf_k,
             "dense_weight": getattr(rag_config, "dense_weight", None),
             "rerank_top_k": rag_config.rerank_top_k,
@@ -727,6 +809,9 @@ class RAGEvaluator:
             "kp_neighbor_window": getattr(rag_config, "kp_neighbor_window", 2),
             "level_penalty": rag_config.level_penalty,
         }
+        # 合并实际生效的 overrides（覆盖默认值）
+        snapshot.update(self.overrides)
+        return snapshot
 
 
 def _to_float(value) -> float:
