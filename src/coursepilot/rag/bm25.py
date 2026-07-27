@@ -165,7 +165,7 @@ class BM25Indexer:
         for row in rows:
             # row[0]=KU.id, row[1]=KU.content, row[2]=KU.summary,
             # row[3]=KU.kp_id, row[4]=KP.kp_path
-            content = row[1]
+            content = row[1] or ""
             summary = row[2] or ""
             texts.append(f"{summary}\n{content}")
             metas.append({

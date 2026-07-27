@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,112 @@ from coursepilot.rag.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
+# ── 对比类问题匹配 ──────────────────────────────────────────
+# 匹配 "A和B有什么区别"、"A与B的联系"、"A与B相比较" 等模式
+# 概念名提取后用 _trim_concept 去除尾部噪声
+_COMPARISON_PAT = re.compile(
+    r"(.{2,30}?)(?:与|和|跟|同)(.{2,30}?)(?:(?:有什么)?(?:区别|联系|不同|相同|差异|比较|对比))",
+    re.UNICODE,
+)
+
+# 概念名尾部噪声清除
+# 只去掉尾部"在…中/上/下/时""对于…""关于…"等结构噪声
+# 注意: 不要用"的"做切分点，因为"的"可能是概念内部结构（如"函数的单调性"）
+_CONCEPT_TRIM_PAT = re.compile(
+    r"(?:对于|关于|从).*$|在[^，。；]*$",
+    re.UNICODE,
+)
+
+
+def _trim_concept(s: str) -> str:
+    """去除概念名尾部附着的结构噪声。
+
+    例:
+      "函数的单调性在区间I上" → "函数的单调性"（保留"的"）
+      "Fermat定理" → "Fermat定理"
+      "对于函数f(x)" → "对于函数f(x)"（正则匹配的是"关于…"）
+    """
+    m = _CONCEPT_TRIM_PAT.search(s)
+    if m:
+        return s[:m.start()].strip()
+    return s.strip()
+
+
+def _extract_comparison_concepts(query: str) -> list[str] | None:
+    """提取对比类问题中的两个概念名。
+
+    例如 "Fermat定理和Lagrange中值定理有什么区别" → ["Fermat定理", "Lagrange中值定理"]
+    返回 None 表示不是对比类问题。
+    """
+    m = _COMPARISON_PAT.search(query)
+    if m:
+        a, b = _trim_concept(m.group(1)), _trim_concept(m.group(2))
+        # 过滤明显不是概念对的匹配（如"题"和"区别"这种）
+        if len(a) >= 2 and len(b) >= 2:
+            return [a, b]
+    return None
+
+
+def _ensure_both_concepts(
+    units: list[dict],
+    candidates: list[dict],
+    concepts: list[str],
+    max_units: int | None = None,
+) -> list[dict]:
+    """确保双概念对比问题的两个概念至少各有一个 unit 在 top 结果中。
+
+    如果 rerank 后某个概念的 unit 缺失，从 candidates 中补回。
+    units: rerank 后的 top units
+    candidates: rerank 前的候选池（RRF 排序）
+    concepts: [概念A, 概念B]
+    max_units: 最终最大数量（默认=rerank_top_k），最多允许超出 2 个
+    """
+    if not concepts or len(concepts) != 2:
+        return units
+
+    from coursepilot.rag.config import config as _cfg
+    max_units = max_units or _cfg.rerank_top_k
+    max_allowed = max_units + 2  # 最多多留 2 个补充 unit
+
+    def _matches_concept(text: str, concept: str) -> bool:
+        """判断内容是否匹配概念（支持部分匹配，避免过度严格要求全等）。"""
+        if not text or not concept:
+            return False
+        # 全等、包含、关键词命中
+        return (concept in text or text in concept
+                or any(kw in text for kw in concept.split()
+                       if len(kw) >= 2))
+
+    # 检查每个概念在 top units 中是否有代表
+    unit_contents = [(u.get("content", "") + u.get("summary", "") + u.get("kp_path", ""))
+                     for u in units]
+    missing_idx = []
+    for i, concept in enumerate(concepts):
+        has_rep = any(_matches_concept(content, concept) for content in unit_contents)
+        if not has_rep:
+            missing_idx.append(i)
+
+    if not missing_idx:
+        return units  # 两个概念都已覆盖
+
+    # 从 candidates 中为缺失的概念补充最佳 unit（rerank 后）
+    # 用候选池中 rank 最高的、匹配该概念的 unit
+    added: list[dict] = []
+    existing_uuids = {u.get("uuid", "") for u in units}
+    for idx in missing_idx:
+        for c in candidates:
+            uid = c.get("uuid", "")
+            if uid and uid not in existing_uuids:
+                content = c.get("content", "") + c.get("summary", "") + c.get("kp_path", "")
+                if _matches_concept(content, concepts[idx]):
+                    c = dict(c)
+                    c["rerank_score"] = 0.0  # 保底分
+                    added.append(c)
+                    existing_uuids.add(uid)
+                    break
+
+    result = units + added
+    return result[:max_allowed]
 
 
 
@@ -55,6 +162,82 @@ class Retriever:
         self.reranker = reranker or Reranker()
         self.bm25_indexer = bm25_indexer or BM25Indexer()
 
+    async def _dual_concept_search(
+        self,
+        session: AsyncSession,
+        rewritten_query: str,
+        course_id: str,
+        concepts: list[str],
+    ) -> list[dict]:
+        """对比类问题：对两个概念分别检索后合并候选集。
+
+        分别编码+检索概念 A 和概念 B，合并去重后保留 top_k 候选。
+        """
+        import time as _time
+
+        all_candidates: dict[str, float] = {}  # uuid -> max_score
+        for concept in concepts:
+            t0 = _time.monotonic()
+            concept_query = f"{rewritten_query} {concept}"
+            print(f"[dual_concept] 检索词: '{concept_query[:80]}'")
+            vecs = self.encoder.encode_query(concept_query)
+            milvus = self.vector_store.hybrid_search(
+                vecs["dense"], vecs["sparse"], course_id, top_k=20,
+            )
+            bm25: list[dict] = []
+            if config.enable_bm25:
+                bm25 = await self.bm25_indexer.search(
+                    session, concept_query, course_id, top_k=config.bm25_top_k,
+                )
+            merged = rrf_fuse(
+                [milvus, bm25] if bm25 else [milvus],
+                k=config.rrf_k,
+                top_k=20,
+                weights=[config.dense_weight, 1.0 - config.dense_weight],
+            )
+            for c in merged:
+                uid = c.get("uuid", "")
+                if uid:
+                    score = c.get("rrf_score", c.get("score", 0))
+                    if uid not in all_candidates or score > all_candidates[uid]:
+                        all_candidates[uid] = score
+            print(f"[dual_concept] 概念'{concept}'检索完成, "
+                  f"候选={len(merged)}, 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+
+        # 合并排序，取 top N
+        sorted_uuids = sorted(all_candidates, key=lambda u: all_candidates[u], reverse=True)
+        # 回查原始数据（需要从结果中获取原始 dict）
+        # 简单做法：用最后一个 merged 中的完整数据
+        merged_pool: dict[str, dict] = {}
+        for c in concepts:
+            concept_query = f"{rewritten_query} {c}"
+            vecs = self.encoder.encode_query(concept_query)
+            milvus = self.vector_store.hybrid_search(
+                vecs["dense"], vecs["sparse"], course_id, top_k=20,
+            )
+            for item in milvus:
+                uid = item.get("uuid", "")
+                if uid:
+                    merged_pool[uid] = item
+            if config.enable_bm25:
+                bm25 = await self.bm25_indexer.search(
+                    session, concept_query, course_id, top_k=config.bm25_top_k,
+                )
+                for item in bm25:
+                    uid = item.get("uuid", "")
+                    if uid:
+                        merged_pool[uid] = item
+
+        result = []
+        for uid in sorted_uuids[:20]:
+            if uid in merged_pool:
+                item = dict(merged_pool[uid])
+                item["score"] = all_candidates[uid]
+                result.append(item)
+
+        print(f"[dual_concept] 双概念检索合并完成, 总候选={len(result)}")
+        return result
+
     async def retrieve(
         self,
         session: AsyncSession,
@@ -80,40 +263,52 @@ class Retriever:
             rewritten = await self.rewriter.rewrite(query)
             print(f"[retriever] 阶段0-改写 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
 
-        # 阶段1：BGE-M3 编码
-        t0 = _time.monotonic()
-        print("[retriever] 阶段1-编码 开始...")
-        vecs = self.encoder.encode_query(rewritten)
-        print(f"[retriever] 阶段1-编码 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
-
-        # 阶段2a：Milvus 混合检索 + RRF
-        t0 = _time.monotonic()
-        print("[retriever] 阶段2-检索 开始...")
-        milvus_candidates = self.vector_store.hybrid_search(
-            vecs["dense"], vecs["sparse"], course_id, top_k=20
-        )
-        print(f"[retriever] 阶段2-检索 耗时={(_time.monotonic()-t0)*1000:.0f}ms, Milvus候选数={len(milvus_candidates)}")
-
-        # 阶段2b：BM25 检索
-        bm25_candidates: list[dict] = []
-        if config.enable_bm25:
-            t1 = _time.monotonic()
-            bm25_candidates = await self.bm25_indexer.search(
-                session, rewritten, course_id, top_k=config.bm25_top_k,
-            )
-            print(f"[retriever] 阶段2b-BM25 耗时={(_time.monotonic()-t1)*1000:.0f}ms, BM25候选数={len(bm25_candidates)}")
-
-        # 阶段2c：RRF 融合 Milvus + BM25
-        if config.enable_bm25 and bm25_candidates:
-            candidates = rrf_fuse(
-                [milvus_candidates, bm25_candidates],
-                k=config.rrf_k,
-                top_k=20,
-                weights=[config.dense_weight, 1.0 - config.dense_weight],
-            )
-            print(f"[retriever] 阶段2c-RRF融合 候选数={len(candidates)}")
+        # 对比类问题强制双概念检索
+        concepts = _extract_comparison_concepts(query)
+        if concepts:
+            print(f"[retriever] 检测到对比类问题，概念A={concepts[0]}, 概念B={concepts[1]}")
+            candidates = await self._dual_concept_search(session, rewritten, course_id, concepts)
+            # 编码改写后的查询，供阶段4 KP 扩展精排使用
+            t0 = _time.monotonic()
+            vecs = self.encoder.encode_query(rewritten)
+            print(f"[retriever] 阶段1-编码(对比类) 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
         else:
-            candidates = milvus_candidates
+            # 阶段1：BGE-M3 编码
+            t0 = _time.monotonic()
+            print("[retriever] 阶段1-编码 开始...")
+            search_query = rewritten
+            vecs = self.encoder.encode_query(search_query)
+            print(f"[retriever] 阶段1-编码 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+
+            # 阶段2a：Milvus 混合检索 + RRF
+            t0 = _time.monotonic()
+            print("[retriever] 阶段2-检索 开始...")
+            milvus_candidates = self.vector_store.hybrid_search(
+                vecs["dense"], vecs["sparse"], course_id, top_k=20
+            )
+            print(f"[retriever] 阶段2-检索 耗时={(_time.monotonic()-t0)*1000:.0f}ms, Milvus候选数={len(milvus_candidates)}")
+
+            # 阶段2b：BM25 检索
+            bm25_candidates: list[dict] = []
+            if config.enable_bm25:
+                t1 = _time.monotonic()
+                bm25_candidates = await self.bm25_indexer.search(
+                    session, search_query, course_id, top_k=config.bm25_top_k,
+                )
+                print(f"[retriever] 阶段2b-BM25 耗时={(_time.monotonic()-t1)*1000:.0f}ms, BM25候选数={len(bm25_candidates)}")
+
+            # 阶段2c：RRF 融合 Milvus + BM25
+            rrf_top_k = 30
+            if config.enable_bm25 and bm25_candidates:
+                candidates = rrf_fuse(
+                    [milvus_candidates, bm25_candidates],
+                    k=config.rrf_k,
+                    top_k=rrf_top_k,
+                    weights=[config.dense_weight, 1.0 - config.dense_weight],
+                )
+                print(f"[retriever] 阶段2c-RRF融合 候选数={len(candidates)}")
+            else:
+                candidates = milvus_candidates
 
         # 阶段3：重排序 → top-k
         t0 = _time.monotonic()
@@ -128,6 +323,10 @@ class Retriever:
                 c["rerank_score"] = c.get("score", 0)
             top_units = candidates[:config.rerank_top_k]
             print(f"[retriever] 阶段3-跳过重排序, top_k={config.rerank_top_k}")
+
+        # 对比类问题：rerank 后确保两个概念至少各有一个 unit
+        if concepts:
+            top_units = _ensure_both_concepts(top_units, candidates, concepts)
 
         # 阶段4：KP 扩展（滑动窗口取 unit + query-unit 重排序）
         t0 = _time.monotonic()
@@ -371,12 +570,32 @@ async def _kp_expand(
     total_chars = 0
     ref_id = 0
 
+    # 第一遍：must_include 无条件保留（不占 max_chars 预算）
+    for u in must_include:
+        ref_id += 1
+        source_header = (
+            f'<source id="{ref_id}" path="{u.get("kp_path", "")}" '
+            f'pages="{u["page_ref"]}" book="{u["filename"]}">\n'
+        )
+        summary_line = f"{u['summary']}\n" if u["summary"] else ""
+        body = f"{summary_line}{u['content']}\n"
+        footer = "</source>\n"
+        block = f"{source_header}{body}{footer}"
+        parts.append(block)
+        context_uuids.append(u["uuid"])
+        total_chars += len(block)
+
+    # 第二遍：逐 KP 路径补全其他 unit（受 max_chars 限制）
     for kp_path in kp_paths:
         units = grouped[kp_path]
-        parts.append(f"## {kp_path}\n")
-        total_chars += len(parts[-1])
-
-        for u in units:
+        # 排除已处理的 must_include
+        remaining = [u for u in units if u["uuid"] not in context_uuids]
+        if not remaining:
+            continue
+        section_header = f"## {kp_path}\n"
+        parts.append(section_header)
+        total_chars += len(section_header)
+        for u in remaining:
             if total_chars > max_chars:
                 break
             ref_id += 1
