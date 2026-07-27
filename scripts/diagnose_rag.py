@@ -25,7 +25,7 @@ from coursepilot.rag.reranker import Reranker
 from coursepilot.rag.retriever import Retriever
 from coursepilot.rag.vector_store import VectorStore
 
-DATASET = Path("eval/questions/eval_questions.json")
+DATASET = Path("eval/questions/20260726/eval_questions.json")
 
 
 async def check_ground_truth_in_candidates(

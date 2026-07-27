@@ -19,7 +19,7 @@ from coursepilot.db import get_session_etx
 from coursepilot.evaluation.rag_eval import RAGEvaluator
 from coursepilot.rag.config import config
 
-DATASET = Path("eval/questions/eval_questions.json")
+DATASET = Path("eval/questions/20260726/eval_questions.json")
 
 # 三种策略的配置覆盖
 STRATEGIES = {

@@ -137,7 +137,7 @@ async def main():
     print(f"输出文件: {output_path}")
     print_distribution(questions)
     print("=" * 60)
-    print("\n下一步: 人工校验后改名为 eval/questions/eval_questions.json")
+    print("\n下一步: 人工校验后放入 eval/questions/YYYYMMDD/ 目录（按日期分目录）")
 
 
 if __name__ == "__main__":

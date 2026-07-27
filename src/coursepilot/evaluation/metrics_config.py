@@ -61,11 +61,37 @@ GRID_SEARCH_PLAN = {
     3: {"level_penalty": [0.0, 0.1, 0.2]},
 }
 
-# 网格搜索每轮固定参数（未被搜索的参数保持当前配置）
-GRID_FIXED_DEFAULTS = {
+# RAG 全部参数默认值（与 RAGConfig 对齐）
+# 网格搜索时，未被搜索的参数以此处为准固定下来。
+# 完整参数说明见 docs/rag/RAG评估体系构建.md §5.1。
+ALL_PARAM_DEFAULTS = {
+    # 功能开关
+    "enable_rewrite": True,
+    "enable_sparse": True,
+    "enable_bm25": True,
+    "enable_rerank": True,
+    "enable_kp_expand": True,
+    "kp_expand_mode": "full",
+    "kp_neighbor_window": 2,
+    # 阈值
+    "reranker_min_score": 0.3,
+    "context_max_chars": 5000,
+    # 检索参数
+    "dense_top_k": 20,
+    "sparse_top_k": 20,
     "rrf_k": 60,
     "dense_weight": 0.5,
     "rerank_top_k": 5,
-    "context_max_chars": 6000,
     "level_penalty": 0.0,
+    # BM25 参数
+    "bm25_top_k": 20,
+    "bm25_cache_ttl": 600,
+    # 编码参数
+    "batch_size": 32,
+    "dim": 1024,
+}
+
+# 网格搜索每轮固定参数（未被搜索的参数保持默认值）
+GRID_FIXED_DEFAULTS = {
+    k: v for k, v in ALL_PARAM_DEFAULTS.items()
 }

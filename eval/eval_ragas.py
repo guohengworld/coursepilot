@@ -39,7 +39,7 @@ from coursepilot.evaluation.metrics_config import (
 from coursepilot.evaluation.rag_eval import EvalReport, RAGEvaluator
 
 
-DATASET_PATH = Path("eval/questions/eval_questions.json")
+DATASET_PATH = Path("eval/questions/20260726/eval_questions.json")
 OUTPUT_DIR = Path("eval/reports")
 
 
@@ -252,11 +252,13 @@ def _expand_grid(param_grid: dict) -> list[dict]:
 
 
 def _save_report(report: EvalReport, prefix: str) -> Path:
-    """保存评估报告为 JSON 文件。"""
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    """保存评估报告为 JSON 文件，按日期分目录。"""
+    date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+    dated_dir = OUTPUT_DIR / date_str
+    dated_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"{prefix}_{timestamp}.json"
-    path = OUTPUT_DIR / filename
+    path = dated_dir / filename
     path.write_text(
         json.dumps(report.to_dict(), ensure_ascii=False, indent=2),
         encoding="utf-8",

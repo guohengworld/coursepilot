@@ -21,7 +21,7 @@ from coursepilot.db import get_session_etx
 from coursepilot.models import KnowledgePoint, KnowledgeUnit
 from coursepilot.rag.encoder import Encoder
 
-EVAL_QUESTIONS_PATH = Path("eval/questions/eval_questions.json")
+EVAL_QUESTIONS_PATH = Path("eval/questions/20260726/eval_questions.json")
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
