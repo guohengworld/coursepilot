@@ -1,4 +1,13 @@
-"""RAG 降级开关、阈值、检索参数集中管理"""
+"""RAG 管线全部可配置参数集中管理。
+
+使用时直接导入模块级实例 `config`：
+    from coursepilot.rag.config import config
+    print(config.rrf_k)
+    config.rrf_k = 40  # 临时覆盖
+
+网格搜索通过 RAGEvaluator(config_overrides=...) 覆盖，不会改动原始值。
+完整参数说明见 docs/rag/RAG评估体系构建.md §5.1。
+"""
 
 from __future__ import annotations
 
@@ -7,34 +16,39 @@ from dataclasses import dataclass
 
 @dataclass
 class RAGConfig:
-    # == 功能开关
-    enable_rewrite: bool = True  # 关闭 → 直接用原始 query
-    enable_sparse: bool = True  # 关闭 → 只用 dense 检索
-    enable_rerank: bool = True  # 关闭 → RRF 后直接取 top-5
-    enable_kp_expand: bool = True  # 关闭 → 只用检索到的 unit 本身（不拉取同 KP 全部文本）
-    kp_expand_mode: str = "full"  # "full" | "neighbor" — KP 扩展模式
-    kp_neighbor_window: int = 2  # neighbor 模式下前后各取 N 个相邻 unit
+    """RAG 检索与生成管线的全部可调参数。
 
-    # == 阈值
-    reranker_min_score: float = 0.3  # 低于此分的 source 直接丢弃
-    context_max_chars: int = 6000  # 送入 LLM 的上下文软上限
+    共 18 项，按功能分为 5 类：功能开关、阈值、检索参数、BM25 参数、编码参数。
+    """
 
-    # == 检索参数
-    dense_top_k: int = 20  # dense 检索返回条数
-    sparse_top_k: int = 20  # sparse 检索返回条数
-    rrf_k: int = 60  # RRF 融合参数
-    dense_weight: float = 0.5  # dense 检索在 RRF 中的权重（0~1），sparse 权重自动为 1-dense_weight
-    rerank_top_k: int = 5  # 重排序后最终送入 LLM 的条数
+    # ── 功能开关 ────────────────────────────────────────────────
+    enable_rewrite: bool = True       # 查询改写：True→LLM 改写 query；False→直接用原始 query
+    enable_sparse: bool = True        # 稀疏检索：True→Milvus 同时查 dense+sparse；False→只查 dense
+    enable_bm25: bool = True          # BM25 检索：True→额外走 BM25 关键词检索；False→只用 Milvus
+    enable_rerank: bool = True        # 重排序：True→cross-encoder 精排；False→RRF score 直接排序
+    enable_kp_expand: bool = True     # KP 扩展：True→拉取同 KP 全部 unit 丰富上下文；False→仅用命中 unit
+    kp_expand_mode: str = "full"      # KP 扩展模式："full"（同 KP 全量）| "neighbor"（相邻滑动窗口）
+    kp_neighbor_window: int = 2       # neighbor 模式下前后各取 N 个相邻 unit（仅 mode="neighbor" 生效）
 
-    # == BM25 参数
-    enable_bm25: bool = True  # 关闭 → 只用 Milvus 混合检索
-    bm25_top_k: int = 20  # BM25 检索返回条数（与 Milvus top_k 对等）
-    bm25_cache_ttl: int = 600  # BM25 索引缓存 TTL（秒）
-    level_penalty: float = 0.0  # 层级不匹配惩罚系数（网格搜索默认起点）
+    # ── 阈值 ────────────────────────────────────────────────────
+    reranker_min_score: float = 0.3   # 重排序最低分数阈值，低于此值的 source 直接丢弃
+    context_max_chars: int = 5000     # 送入 LLM 的上下文软上限（字符数），超长截断
 
-    # == 编码参数
-    batch_size: int = 32  # BGE-M3 编码 batch size
-    dim: int = 1024  # BGE-M3 dense 维度
+    # ── 检索参数 ────────────────────────────────────────────────
+    dense_top_k: int = 20             # Milvus dense 向量检索返回候选条数
+    sparse_top_k: int = 20            # Milvus sparse 向量检索返回候选条数（enable_sparse=True 时生效）
+    rrf_k: int = 60                   # RRF 融合参数 k，控制稀疏/稠密候选的排序平衡
+    dense_weight: float = 0.5         # dense 在 RRF 融合中的权重（0~1），sparse 权重 = 1 - dense_weight
+    rerank_top_k: int = 5             # 重排序后最终送入 LLM 生成器的 chunk 数量
+    level_penalty: float = 0.0        # KP 树深度惩罚系数（enable_kp_expand=True 时生效）
+
+    # ── BM25 参数 ───────────────────────────────────────────────
+    bm25_top_k: int = 20              # BM25 检索返回候选条数（enable_bm25=True 时生效）
+    bm25_cache_ttl: int = 600         # BM25 索引缓存有效期（秒）
+
+    # ── 编码参数 ────────────────────────────────────────────────
+    batch_size: int = 32              # BGE-M3 编码器 batch size，影响编码速度和显存占用
+    dim: int = 1024                   # BGE-M3 dense 向量维度，需与 Milvus collection schema 一致
 
 
 config = RAGConfig()
