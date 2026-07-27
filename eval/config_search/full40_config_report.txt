@@ -1,0 +1,597 @@
+================================================================================
+  40题黄金数据集 — 检索配置对比报告
+================================================================================
+
+总题数: 36 (排除不可回答)
+测试配置数: 12
+
+────────────────────────────────────────────────────────────────────────────────
+  配置排名 (按平均 Context Recall 降序)
+────────────────────────────────────────────────────────────────────────────────
+
+  排名   配置名称           平均Recall   耗时(s)    applic      calcul      compar      concep      theore      
+  ----------------------------------------------------------------------------------------------------
+  1    topk8          0.8333     136.5    1.0000      0.5000      0.8333      1.0000      0.8750      
+  2    baseline       0.8056     147.2    1.0000      0.3750      0.8333      1.0000      0.8750      
+  3    rrf_k30        0.7778     130.0    0.7500      0.5000      0.8333      1.0000      0.7500      
+  4    no_bm25        0.7500     124.3    0.7500      0.3750      0.8333      1.0000      0.7500      
+  5    dense07        0.7500     129.3    0.7500      0.3750      0.8333      1.0000      0.7500      
+  6    no_rewrite     0.7500     63.9     0.7500      0.3750      0.8333      1.0000      0.7500      
+  7    neighbor       0.7361     106.6    0.7500      0.3750      0.7500      1.0000      0.7500      
+  8    no_kp_expand   0.7222     105.2    0.7500      0.3750      0.8333      0.9000      0.7500      
+  9    dense03        0.7222     129.1    0.5000      0.1250      0.8333      1.0000      1.0000      
+  10   rrf_k100       0.7222     144.3    0.7500      0.2500      0.8333      1.0000      0.7500      
+  11   no_rerank      0.6389     106.1    0.5000      0.1250      0.8333      0.9000      0.7500      
+  12   bm25_only      0.6389     125.7    0.5000      0.1250      0.8333      0.9000      0.7500      
+
+────────────────────────────────────────────────────────────────────────────────
+  各配置详细数据
+────────────────────────────────────────────────────────────────────────────────
+
+  ▶ topk8
+    参数: {"rerank_top_k": 8}
+    平均 Recall: 0.8333
+    耗时: 136.5s
+    [application] count=4  recall=1.0000  full=1.00  zero=0.00
+    [calculation] count=8  recall=0.5000  full=0.50  zero=0.50
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=1.0000  full=1.00  zero=0.00
+    [theorem] count=8  recall=0.8750  full=0.88  zero=0.12
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=0.0000  hit=0/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=1.0000  hit=1/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=1.0000  hit=1/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=1.0000  hit=1/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=1.0000  hit=1/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=1.0000  hit=1/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=0.0000  hit=0/1  叙述微分的概念
+      #37 [theorem   ] recall=1.0000  hit=1/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=1.0000  hit=1/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ baseline
+    参数: {}
+    平均 Recall: 0.8056
+    耗时: 147.2s
+    [application] count=4  recall=1.0000  full=1.00  zero=0.00
+    [calculation] count=8  recall=0.3750  full=0.38  zero=0.62
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=1.0000  full=1.00  zero=0.00
+    [theorem] count=8  recall=0.8750  full=0.88  zero=0.12
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=0.0000  hit=0/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=1.0000  hit=1/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=1.0000  hit=1/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=1.0000  hit=1/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=1.0000  hit=1/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=0.0000  hit=0/1  叙述微分的概念
+      #37 [theorem   ] recall=1.0000  hit=1/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=1.0000  hit=1/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ rrf_k30
+    参数: {"rrf_k": 30}
+    平均 Recall: 0.7778
+    耗时: 130.0s
+    [application] count=4  recall=0.7500  full=0.75  zero=0.25
+    [calculation] count=8  recall=0.5000  full=0.50  zero=0.50
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=1.0000  full=1.00  zero=0.00
+    [theorem] count=8  recall=0.7500  full=0.75  zero=0.25
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=1.0000  hit=1/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=1.0000  hit=1/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=1.0000  hit=1/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=1.0000  hit=1/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=0.0000  hit=0/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=0.0000  hit=0/1  叙述微分的概念
+      #37 [theorem   ] recall=1.0000  hit=1/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=0.0000  hit=0/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ no_bm25
+    参数: {"enable_bm25": false}
+    平均 Recall: 0.7500
+    耗时: 124.3s
+    [application] count=4  recall=0.7500  full=0.75  zero=0.25
+    [calculation] count=8  recall=0.3750  full=0.38  zero=0.62
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=1.0000  full=1.00  zero=0.00
+    [theorem] count=8  recall=0.7500  full=0.75  zero=0.25
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=1.0000  hit=1/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=1.0000  hit=1/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=0.0000  hit=0/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=1.0000  hit=1/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=0.0000  hit=0/1  叙述微分的概念
+      #37 [theorem   ] recall=0.0000  hit=0/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=1.0000  hit=1/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ dense07
+    参数: {"dense_weight": 0.7}
+    平均 Recall: 0.7500
+    耗时: 129.3s
+    [application] count=4  recall=0.7500  full=0.75  zero=0.25
+    [calculation] count=8  recall=0.3750  full=0.38  zero=0.62
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=1.0000  full=1.00  zero=0.00
+    [theorem] count=8  recall=0.7500  full=0.75  zero=0.25
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=0.0000  hit=0/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=1.0000  hit=1/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=1.0000  hit=1/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=1.0000  hit=1/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=0.0000  hit=0/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=0.0000  hit=0/1  叙述微分的概念
+      #37 [theorem   ] recall=1.0000  hit=1/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=0.0000  hit=0/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ no_rewrite
+    参数: {"enable_rewrite": false}
+    平均 Recall: 0.7500
+    耗时: 63.9s
+    [application] count=4  recall=0.7500  full=0.75  zero=0.25
+    [calculation] count=8  recall=0.3750  full=0.38  zero=0.62
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=1.0000  full=1.00  zero=0.00
+    [theorem] count=8  recall=0.7500  full=0.75  zero=0.25
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=0.0000  hit=0/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=1.0000  hit=1/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=1.0000  hit=1/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=1.0000  hit=1/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=0.0000  hit=0/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=0.0000  hit=0/1  叙述微分的概念
+      #37 [theorem   ] recall=1.0000  hit=1/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=0.0000  hit=0/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ neighbor
+    参数: {"kp_expand_mode": "neighbor", "kp_neighbor_window": 3}
+    平均 Recall: 0.7361
+    耗时: 106.6s
+    [application] count=4  recall=0.7500  full=0.75  zero=0.25
+    [calculation] count=8  recall=0.3750  full=0.38  zero=0.62
+    [comparison] count=6  recall=0.7500  full=0.67  zero=0.17
+    [concept] count=10  recall=1.0000  full=1.00  zero=0.00
+    [theorem] count=8  recall=0.7500  full=0.75  zero=0.25
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.0000  hit=0/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=0.0000  hit=0/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=1.0000  hit=1/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=1.0000  hit=1/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=1.0000  hit=1/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=0.0000  hit=0/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=0.0000  hit=0/1  叙述微分的概念
+      #37 [theorem   ] recall=1.0000  hit=1/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=0.0000  hit=0/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ no_kp_expand
+    参数: {"enable_kp_expand": false}
+    平均 Recall: 0.7222
+    耗时: 105.2s
+    [application] count=4  recall=0.7500  full=0.75  zero=0.25
+    [calculation] count=8  recall=0.3750  full=0.38  zero=0.62
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=0.9000  full=0.90  zero=0.10
+    [theorem] count=8  recall=0.7500  full=0.75  zero=0.25
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=0.0000  hit=0/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=1.0000  hit=1/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=1.0000  hit=1/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=0.0000  hit=0/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=1.0000  hit=1/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=0.0000  hit=0/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=0.0000  hit=0/1  叙述微分的概念
+      #37 [theorem   ] recall=1.0000  hit=1/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=0.0000  hit=0/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ dense03
+    参数: {"dense_weight": 0.3}
+    平均 Recall: 0.7222
+    耗时: 129.1s
+    [application] count=4  recall=0.5000  full=0.50  zero=0.50
+    [calculation] count=8  recall=0.1250  full=0.12  zero=0.88
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=1.0000  full=1.00  zero=0.00
+    [theorem] count=8  recall=1.0000  full=1.00  zero=0.00
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=0.0000  hit=0/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=0.0000  hit=0/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=1.0000  hit=1/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=0.0000  hit=0/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=0.0000  hit=0/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=1.0000  hit=1/1  叙述微分的概念
+      #37 [theorem   ] recall=1.0000  hit=1/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=1.0000  hit=1/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ rrf_k100
+    参数: {"rrf_k": 100}
+    平均 Recall: 0.7222
+    耗时: 144.3s
+    [application] count=4  recall=0.7500  full=0.75  zero=0.25
+    [calculation] count=8  recall=0.2500  full=0.25  zero=0.75
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=1.0000  full=1.00  zero=0.00
+    [theorem] count=8  recall=0.7500  full=0.75  zero=0.25
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=0.0000  hit=0/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=0.0000  hit=0/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=1.0000  hit=1/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=1.0000  hit=1/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=0.0000  hit=0/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=1.0000  hit=1/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=0.0000  hit=0/1  叙述微分的概念
+      #37 [theorem   ] recall=1.0000  hit=1/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=0.0000  hit=0/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ no_rerank
+    参数: {"enable_rerank": false}
+    平均 Recall: 0.6389
+    耗时: 106.1s
+    [application] count=4  recall=0.5000  full=0.50  zero=0.50
+    [calculation] count=8  recall=0.1250  full=0.12  zero=0.88
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=0.9000  full=0.90  zero=0.10
+    [theorem] count=8  recall=0.7500  full=0.75  zero=0.25
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=0.0000  hit=0/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=0.0000  hit=0/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=0.0000  hit=0/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=0.0000  hit=0/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=1.0000  hit=1/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=0.0000  hit=0/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=1.0000  hit=1/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=1.0000  hit=1/1  叙述微分的概念
+      #37 [theorem   ] recall=0.0000  hit=0/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=0.0000  hit=0/1  推导隐函数求二阶导数的一般方法。
+
+  ▶ bm25_only
+    参数: {"enable_rerank": false, "enable_bm25": true}
+    平均 Recall: 0.6389
+    耗时: 125.7s
+    [application] count=4  recall=0.5000  full=0.50  zero=0.50
+    [calculation] count=8  recall=0.1250  full=0.12  zero=0.88
+    [comparison] count=6  recall=0.8333  full=0.67  zero=0.00
+    [concept] count=10  recall=0.9000  full=0.90  zero=0.10
+    [theorem] count=8  recall=0.7500  full=0.75  zero=0.25
+    逐题 Recall:
+      #5  [comparison] recall=1.0000  hit=2/2  Fermat定理和Lagrange中值定理有什么区别和联系？
+      #6  [comparison] recall=0.5000  hit=1/2  L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？
+      #7  [comparison] recall=0.5000  hit=1/2  函数的单调性与凸性有什么区别和联系？
+      #8  [comparison] recall=1.0000  hit=1/1  曲率和曲率半径有什么区别和联系？
+      #9  [comparison] recall=1.0000  hit=1/1  导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？
+      #10 [comparison] recall=1.0000  hit=1/1  L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？
+      #11 [calculation] recall=0.0000  hit=0/1  已知 $x_n = \frac{n^2 + 1}{3n^2 - 2n + 8}$，求证：$\lim\
+      #12 [calculation] recall=0.0000  hit=0/1  试证 $\lim\limits_{n\to\infty} \sqrt[n]{n}$ = 1
+      #13 [calculation] recall=1.0000  hit=1/1  计算极限 $\lim\limits_{n\to\infty} \left(1 - \frac{1}{
+      #14 [calculation] recall=0.0000  hit=0/1  计算极限 $\lim\limits_{x\to 0} \frac{\sin 5x}{\arctan 
+      #15 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1 + \frac{1}{2
+      #16 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{5^n + (-2)^n}{
+      #17 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \frac{1^2 + 2^2 + \c
+      #18 [calculation] recall=0.0000  hit=0/1  求极限 $\lim\limits_{n\to\infty} \left( \frac{1}{n^2}
+      #19 [concept   ] recall=0.0000  hit=0/1  什么是函数？
+      #20 [concept   ] recall=1.0000  hit=1/1  说明函数的单调性定义。
+      #21 [concept   ] recall=1.0000  hit=1/1  什么是双曲函数？
+      #22 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向压缩的含义。
+      #23 [concept   ] recall=1.0000  hit=1/1  什么是数集的有界性？
+      #24 [concept   ] recall=1.0000  hit=1/1  说明函数奇偶性的定义。
+      #25 [concept   ] recall=1.0000  hit=1/1  什么是严格单调增加函数？
+      #26 [concept   ] recall=1.0000  hit=1/1  说明函数图形变换中水平方向扩展的含义。
+      #27 [concept   ] recall=1.0000  hit=1/1  什么是数集的上界？
+      #28 [concept   ] recall=1.0000  hit=1/1  什么是数列极限的定义？
+      #29 [application] recall=1.0000  hit=1/1  用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函
+      #30 [application] recall=0.0000  hit=0/1  用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。
+      #31 [application] recall=0.0000  hit=0/1  用分部积分法，求不定积分$\int x e^x dx$。
+      #32 [application] recall=1.0000  hit=1/1  用定积分的换元法，计算$\int_0^{rac{a}{2}} \sqrt{a^2 - x^2} d
+      #33 [theorem   ] recall=1.0000  hit=1/1  叙述导数的四则运算法则（定理3.3）。
+      #34 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处左导数的定义。
+      #35 [theorem   ] recall=1.0000  hit=1/1  叙述函数在一点处右导数的定义。
+      #36 [theorem   ] recall=1.0000  hit=1/1  叙述微分的概念
+      #37 [theorem   ] recall=0.0000  hit=0/1  证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。
+      #38 [theorem   ] recall=1.0000  hit=1/1  叙述二阶导数的定义。
+      #39 [theorem   ] recall=1.0000  hit=1/1  叙述幂指函数的对数求导法的一般步骤。
+      #40 [theorem   ] recall=0.0000  hit=0/1  推导隐函数求二阶导数的一般方法。
+
+================================================================================
+  报告结束
+================================================================================
