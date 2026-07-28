@@ -1,31 +1,48 @@
 """LangGraph 状态机构建
 
-Phase 2 拓扑（条件边 + 重试循环）：
+P1 拓扑（含 Agentic RAG 质检循环）：
     START → build_context → classify → [route_by_intent]
-      ├→ query_rag → [route_after_rag] → finalize → END
+      ├─ query_rag → [route_after_rag] → finalize → END
       │   └─ (practice/review) → generate_quiz → evaluate_quiz
       │        └─ [route_after_evaluate]:
       │            FAIL+retry<2 → generate_quiz (重试)
       │            PASS+practice → create_plan → finalize
       │            PASS+review → review_plan → finalize
-      ├→ get_mastery → query_rag → (同上)
-      └→ diagnose → finalize → END
+      ├─ retrieve → check_sufficiency → [route_after_check]
+      │   ├─ "synthesize" → [route_after_rag] → (同上)
+      │   └─ "retrieve" → retrieve (质检循环, ≤complex_max_rounds 轮)
+      ├─ get_mastery → query_rag → (同上)
+      └─ diagnose → finalize → END
 """
 import logging
 
 import psycopg
-from psycopg.rows import dict_row
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
+from psycopg.rows import dict_row
 
 from coursepilot.agent.nodes import (
-    build_context_node, classify_node, finalize_node, query_rag_node,
-    get_mastery_node, generate_quiz_node, evaluate_quiz_node,
-    create_plan_node, diagnose_node, review_plan_node, human_review_node
+    build_context_node,
+    check_sufficiency_node,
+    classify_node,
+    create_plan_node,
+    diagnose_node,
+    evaluate_quiz_node,
+    finalize_node,
+    generate_quiz_node,
+    get_mastery_node,
+    human_review_node,
+    query_rag_node,
+    retrieve_node,
+    review_plan_node,
+    synthesize_node,
 )
 from coursepilot.agent.routing import (
-    route_by_intent, route_after_rag, route_after_evaluate,
+    route_after_check,
+    route_after_evaluate,
+    route_after_rag,
     route_after_review,
+    route_by_intent,
 )
 from coursepilot.agent.state import AgentState
 from coursepilot.config import settings
@@ -51,7 +68,7 @@ async def _get_saver() -> AsyncPostgresSaver:
         # Windows + psycopg 3.3: pipeline 模式会导致 put() 卡死
         _saver.supports_pipeline = False
         await _saver.setup()
-        logger.info("✅ AsyncPostgresSaver 初始化完成（pipeline 已禁用）")
+        logger.info("AsyncPostgresSaver 初始化完成（pipeline 已禁用）")
     return _saver
 
 
@@ -74,23 +91,27 @@ async def build_agent_graph():
     builder.add_node("review_plan", review_plan_node)
     builder.add_node("finalize", finalize_node)
     builder.add_node("human_review", human_review_node)
+    # P1: Agentic RAG 质检循环
+    builder.add_node("retrieve", retrieve_node)
+    builder.add_node("check_sufficiency", check_sufficiency_node)
+    builder.add_node("synthesize", synthesize_node)
 
     builder.add_edge(START, "build_context")
     builder.add_edge("build_context", "classify")
 
-    # 条件边
-    # classify → intent 分发
+    # 条件边: classify → intent + complexity 分发
     builder.add_conditional_edges("classify", route_by_intent, {
         "query_rag": "query_rag",
+        "retrieve": "retrieve",
         "get_mastery": "get_mastery",
         "diagnose": "diagnose",
-        "human_review": "human_review"
+        "human_review": "human_review",
     })
 
     # human_review 批准后继续
     builder.add_conditional_edges("human_review", route_after_review, {
-        "get_mastery": "get_mastery",  # 已批准 → 继续
-        "finalize": "finalize",  # 已拒绝 → 结束
+        "get_mastery": "get_mastery",
+        "finalize": "finalize",
     })
 
     # get_mastery → 始终进 query_rag 获取教材内容
@@ -98,6 +119,24 @@ async def build_agent_graph():
 
     # query_rag → 按 intent 决定是否继续出题
     builder.add_conditional_edges("query_rag", route_after_rag, {
+        "generate_quiz": "generate_quiz",
+        "finalize": "finalize",
+    })
+
+    # P1: 质检循环
+    # retrieve → check_sufficiency（固定边）
+    builder.add_edge("retrieve", "check_sufficiency")
+
+    # check_sufficiency → 质检结果路由
+    # 不足且未达上限 → 回 retrieve 补搜
+    # 充足或已达上限 → synthesize 生成答案
+    builder.add_conditional_edges("check_sufficiency", route_after_check, {
+        "retrieve": "retrieve",
+        "synthesize": "synthesize",
+    })
+
+    # synthesize → 同 query_rag 一样，按 intent 决定是否继续出题
+    builder.add_conditional_edges("synthesize", route_after_rag, {
         "generate_quiz": "generate_quiz",
         "finalize": "finalize",
     })

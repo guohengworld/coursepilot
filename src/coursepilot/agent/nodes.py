@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.agent.context import build_context as build_context_logic
 from coursepilot.agent.profile_updater import update_profile
+from coursepilot.agent.skills.check_sufficiency import check_sufficiency
 from coursepilot.agent.skills.classify_intent import classify_intent
 from coursepilot.agent.skills.diagnose import diagnose, generate_llm_analysis
 from coursepilot.agent.skills.evaluate_quiz import evaluate_quiz
@@ -126,6 +127,122 @@ async def query_rag_node(state: dict) -> dict:
         # 恢复原始配置
         if _need_restore:
             rag_config.rerank_top_k = saved_rerank_top_k
+
+
+async def retrieve_node(state: dict) -> dict:
+    """仅执行 RAG 检索，不生成答案。
+
+    复杂路径中替代 query_rag_node 的检索部分，
+    结果由 check_sufficiency_node 质检后决定是否生成答案。
+    """
+    try:
+        from coursepilot.rag.retriever import Retriever
+
+        retriever = Retriever()
+        async with async_session_factory() as session:
+            context, metadata = await retriever.retrieve(
+                session, state["query"], state["course_id"],
+            )
+
+        source_kp_paths = metadata.get("source_kp_paths", [])
+        sources = [{"kp_path": p} for p in source_kp_paths]
+
+        retry_count = state.get("retrieval_retry_count", 0)
+        logger.info("检索完成 (第%d轮): context=%d chars, sources=%d",
+                    retry_count + 1, len(context), len(sources))
+
+        return {
+            "context": context,
+            "retrieved_metadata": metadata,
+            "sources": sources,
+            "error": None,
+        }
+    except Exception as e:
+        logger.exception("retrieve_node 异常")
+        return {"context": "", "retrieved_metadata": {}, "sources": [], "error": str(e)}
+
+
+async def check_sufficiency_node(state: dict) -> dict:
+    """质检：判断检索到的教材内容是否足够回答用户问题。
+
+    不足时递增 retrieval_retry_count 触发补搜循环。
+    """
+    try:
+        query = state["query"]
+        context = state.get("context", "")
+        metadata = state.get("retrieved_metadata", {})
+        kp_paths = metadata.get("source_kp_paths", [])
+        retry_count = state.get("retrieval_retry_count", 0)
+        max_rounds = rag_config.complex_max_rounds
+
+        result = await check_sufficiency(
+            query=query, context=context, kp_paths=kp_paths,
+        )
+
+        sufficient = result.get("sufficient", True)
+        confidence = result.get("confidence", 0.0)
+
+        if not sufficient and retry_count < max_rounds:
+            # 需要补搜
+            new_retry = retry_count + 1
+            logger.info("质检不足 (第%d轮/%d轮): confidence=%.2f, missing=%s",
+                        new_retry, max_rounds, confidence, result.get("missing_info", ""))
+        else:
+            new_retry = retry_count  # 充足或已达上限，不再递增
+            if not sufficient:
+                logger.info("质检不足但已达最大轮数 %d，强制生成", max_rounds)
+
+        # 如果质检告知缺少关键概念，尝试从 metadata 中推测改写方向
+        _missing_info = result.get("missing_info", "")
+
+        return {
+            "sufficiency": result,
+            "retrieval_retry_count": new_retry,
+            "error": None,
+        }
+    except Exception as e:
+        logger.exception("check_sufficiency_node 异常")
+        return {
+            "sufficiency": {"sufficient": True, "confidence": 0.5, "missing_info": ""},
+            "retrieval_retry_count": state.get("retrieval_retry_count", 0),
+            "error": str(e),
+        }
+
+
+async def synthesize_node(state: dict) -> dict:
+    """根据已有检索结果生成最终答案。
+
+    复杂路径中替代 query_rag_node 的生成部分。
+    直接调用 Generator.generate()，使用 state 中已存在的 context。
+    """
+    try:
+        from coursepilot.rag.generator import Generator
+
+        generator = Generator()
+        answer, token_info = await generator.generate(
+            query=state["query"],
+            context=state.get("context", ""),
+            course_context=state.get("course_context", {}),
+            conversation=state.get("conversation"),
+            rolling_summary=state.get("rolling_summary", ""),
+            user_profile=state.get("user_profile"),
+        )
+
+        token_info["routing_complexity"] = "complex"
+        llm_calls = list(state.get("llm_calls", []))
+        llm_calls.append({"node": "synthesize", **token_info})
+
+        return {
+            "answer": answer,
+            "llm_calls": llm_calls,
+            "error": None,
+        }
+    except Exception as e:
+        logger.exception("synthesize_node 异常")
+        return {
+            "answer": f"抱歉，生成答案时出错了：{e}",
+            "error": str(e),
+        }
 
 async def finalize_node(state: dict) -> dict:
     """持久化 + 会话更新 + 滚动摘要 + 异步触发 profile_updater

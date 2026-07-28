@@ -40,6 +40,11 @@ class AgentState(TypedDict):
     # 控制字段
     error: str | None           # 节点执行错误信息
 
+    # P1: Agentic RAG 质检与多轮检索
+    retrieval_retry_count: int  # 当前补搜轮数（0~complex_max_rounds）
+    sufficiency: dict | None    # check_sufficiency 输出:
+                                #   {"sufficient": bool, "missing_info": str, ...}
+
     # 掌握度
     mastery: dict               # get_mastery 输出: {"mastery_level": {...}, "weak_kps": [...]}
 
