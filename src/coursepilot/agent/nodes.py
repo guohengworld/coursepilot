@@ -21,6 +21,7 @@ from coursepilot.agent.skills.review_plan import review_plan
 from coursepilot.agent.skills.update_qa_record import update_qa_record
 from coursepilot.db import async_session_factory
 from coursepilot.models import AgentSession, User
+from coursepilot.rag.config import config as rag_config
 
 logger = logging.getLogger(__name__)
 
@@ -46,24 +47,52 @@ async def build_context_node(state: dict) -> dict:
         return {"course_context": {}, "user_profile": None, "recent_qa": [], "error": str(e)}
 
 async def classify_node(state: dict) -> dict:
-    """意图分类（使用 conversation 替代仅最近 QA）"""
+    """意图分类 + 复杂度判断（P0: Agentic RAG 智能路由）"""
     try:
         # 优先使用 conversation 最近轮次；未接入时回退 recent_qa
         conversation = state.get("conversation") or state.get("recent_qa", [])
-        intent, token_info = await classify_intent(
+        cls_result = await classify_intent(
             query=state["query"],
             course_context=state.get("course_context", {}),
             recent_qa=conversation,
         )
+        # 兼容 2-元组（旧）和 3-元组（P0 新增 complexity）
+        if len(cls_result) == 3:
+            intent, complexity, token_info = cls_result
+        else:
+            intent, token_info = cls_result
+            complexity = "simple"
         llm_calls = list(state.get("llm_calls", []))
         llm_calls.append({"node": "classify", **token_info})
-        return {"intent": intent, "llm_calls": llm_calls, "error": None}
+        logger.info("classify 结果: intent=%s complexity=%s", intent, complexity)
+        return {
+            "intent": intent,
+            "complexity": complexity,
+            "llm_calls": llm_calls,
+            "error": None,
+        }
     except Exception as e:
         logger.exception("classify 节点异常")
-        return {"intent": "question", "error": str(e)}
+        return {"intent": "question", "complexity": "simple", "error": str(e)}
 
 async def query_rag_node(state: dict) -> dict:
-    """RAG 检索 + LLM 生成（携带分层记忆）"""
+    """RAG 检索 + LLM 生成（携带分层记忆）。
+
+    根据 complexity 切换快慢通道：
+    - simple: 轻量检索（rerank_top_k=simple_top_k），保留 KP 扩展
+    - complex: 全量检索（rerank_top_k=8，保留现有完整管道）
+    """
+    complexity = state.get("complexity", "simple")
+
+    # ── 简单通道：临时切换 rerank_top_k 为轻量参数 ──
+    if complexity == "simple" and rag_config.enable_routing:
+        saved_rerank_top_k = rag_config.rerank_top_k
+        rag_config.rerank_top_k = rag_config.simple_top_k
+        logger.info("简单通道: rerank_top_k=%d (保留 KP 扩展)", rag_config.rerank_top_k)
+        _need_restore = True
+    else:
+        _need_restore = False
+
     try:
         async with async_session_factory() as session:
             answer, context, metadata, sources, token_info = await query_rag(
@@ -75,6 +104,8 @@ async def query_rag_node(state: dict) -> dict:
                 rolling_summary=state.get("rolling_summary", ""),
                 user_profile=state.get("user_profile"),
             )
+        # 在 token_info 中标记路由信息
+        token_info["routing_complexity"] = complexity
         llm_calls = list(state.get("llm_calls", []))
         llm_calls.append({"node": "query_rag", **token_info})
         return {
@@ -91,6 +122,10 @@ async def query_rag_node(state: dict) -> dict:
             "answer": f"抱歉，检索知识库时出错了：{e}",
             "error": str(e),
         }
+    finally:
+        # 恢复原始配置
+        if _need_restore:
+            rag_config.rerank_top_k = saved_rerank_top_k
 
 async def finalize_node(state: dict) -> dict:
     """持久化 + 会话更新 + 滚动摘要 + 异步触发 profile_updater

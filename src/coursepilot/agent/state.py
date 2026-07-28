@@ -26,6 +26,7 @@ class AgentState(TypedDict):
 
     # classify 节点输出
     intent: str                 # question / practice / diagnose / review / code_help
+    complexity: str             # simple / complex（P0: Agentic RAG 智能路由）
 
     # query_rag 节点输出
     context: str                # RAG 检索到的教材上下文（XML 格式）

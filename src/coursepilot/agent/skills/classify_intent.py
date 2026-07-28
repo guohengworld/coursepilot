@@ -1,7 +1,10 @@
-"""意图分类 Skill：基于 LLM 的意图识别
+"""意图分类 Skill：基于 LLM 的意图识别 + 复杂度判断
 
-返回 question / practice / diagnose / review / code_help 之一
+返回结构化分类结果，包含：
+  - intent: question / practice / diagnose / review / code_help
+  - complexity: simple / complex
 """
+import json
 import logging
 
 from openai import AsyncOpenAI
@@ -11,27 +14,44 @@ from coursepilot.config import settings
 logger = logging.getLogger(__name__)
 
 
-CLASSIFY_SYSTEM = """你是一个教学系统意图分类器。根据用户的问题和对话上下文，判断用户最可能的意图。
+CLASSIFY_SYSTEM = """你是一个教学系统意图分类器。
+根据用户的问题和对话上下文，判断用户最可能的意图和问题复杂度。
 
-分类选项：
-- question: 用户问"什么是X"、"解释X"、"X是什么意思"、"X怎么用"等知识性提问，或问一个具体知识点。**不包括请求出题、练习、分析学习情况**
-- practice: 用户明确要求"出几道题"、"出题"、"练习"、"练习题"、"做几道题"、"考考我"、"给我题目"、"来点题目"等练习请求
-- diagnose: 想了解自己的学习情况、学习效果、薄弱环节，如"我哪里掌握得不好"、"帮我分析一下我的学习情况"、"帮我诊断"、"分析我的学习"、"我学得怎么样"、"我的掌握情况"
-- review: 想复习，如"帮我复习一下"、"总结本章重点"、"制定复习计划"、"帮我总结"
-- code_help: 代码相关问题，如"这个代码为什么报错"、"帮我调试"、"代码有bug"
+## 意图分类
+- question: 问"什么是X"、"解释X"、"X是什么意思"等知识性提问，或问具体知识点。
+  **不包括请求出题、练习、分析学习情况**
+- practice: 明确要求"出题"、"练习"、"做几道题"、"考考我"、"来点题目"等练习请求
+- diagnose: 想了解自己的学习情况、薄弱环节，如"帮我分析"、"我学得怎么样"、"掌握情况"
+- review: 想复习，如"帮我复习"、"总结本章重点"、"制定复习计划"
+- code_help: 代码相关问题，如"这个代码为什么报错"、"帮我调试"
 
-只输出分类名称，不要输出其他内容。"""
+## 复杂度判断
+分析问题是否需要多源信息拼接、跨知识点推理或对比分析：
+- simple: 单知识点、事实性、可直接从教材一段内容回答。
+  如"什么是极限"、"罗尔定理的条件是什么"
+- complex: 多知识点比较（"A和B有什么区别"）、需要多步推理、
+  信息跨多个章节、需要多次检索才能回答
+
+## 输出格式
+必须严格输出 JSON 格式，不要包含其他内容：
+{"intent": "分类名称", "complexity": "simple或complex", "reasoning": "简要判断理由"}"""
 
 
 async def classify_intent(
     query: str,
     course_context: dict | None = None,
     recent_qa: list[dict] | None = None
-) -> tuple[str, dict]:
-    """返回 (意图名称, token用量)。纯 LLM 分类。"""
+) -> tuple[str, str, dict]:
+    """返回 (intent, complexity, token_info)。
+
+    Returns:
+        intent: question / practice / diagnose / review / code_help
+        complexity: simple / complex
+        token_info: {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}
+    """
     if not settings.llm_api_key:
-        logger.warning("LLM API key 未配置，默认返回 question")
-        return "question", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        logger.warning("LLM API key 未配置，默认返回 question+simple")
+        return "question", "simple", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     # LLM 分类
     parts = [f"用户问题：{query}"]
@@ -61,15 +81,11 @@ async def classify_intent(
             {"role": "user", "content": prompt}
         ],
         temperature=0.3,
-        max_tokens=50,
+        max_tokens=150,
     )
     raw = response.choices[0].message.content
     finish = response.choices[0].finish_reason
     logger.info("classify_intent LLM response finish=%s raw=%r", finish, raw)
-    if not raw:
-        logger.warning("classify_intent 模型返回空内容 finish=%s", finish)
-        return "question", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    intent = raw.strip().lower()
 
     usage = response.usage
     token_info = {
@@ -77,8 +93,46 @@ async def classify_intent(
         "completion_tokens": usage.completion_tokens if usage else 0,
         "total_tokens": usage.total_tokens if usage else 0,
     }
-    valid = {"question", "practice", "diagnose", "review", "code_help"}
-    result = intent if intent in valid else "question"
-    if intent != result:
-        logger.warning("classify_intent 返回无效值 %r，已降级为 question", raw)
-    return result, token_info
+
+    # 降级默认值
+    intent = "question"
+    complexity = "simple"
+
+    if not raw:
+        logger.warning("classify_intent 模型返回空内容 finish=%s", finish)
+        return intent, complexity, token_info
+
+    # 尝试解析 JSON
+    try:
+        result = json.loads(raw.strip())
+        if isinstance(result, dict):
+            raw_intent = result.get("intent", "").strip().lower()
+            raw_complexity = result.get("complexity", "").strip().lower()
+            raw_reasoning = result.get("reasoning", "")
+
+            valid_intents = {"question", "practice", "diagnose", "review", "code_help"}
+            valid_complexities = {"simple", "complex"}
+
+            if raw_intent in valid_intents:
+                intent = raw_intent
+            else:
+                logger.warning("classify_intent 无效意图 %r，降级为 question", raw_intent)
+
+            if raw_complexity in valid_complexities:
+                complexity = raw_complexity
+            else:
+                logger.warning("classify_intent 无效复杂度 %r，降级为 simple", raw_complexity)
+
+            if raw_reasoning:
+                logger.info("classify_intent 推理: %s", raw_reasoning)
+    except (json.JSONDecodeError, AttributeError) as e:
+        # 兜底：尝试直接按文本解析（兼容旧格式）
+        cleaned = raw.strip().lower().split("\n")[0].strip()
+        valid_intents = {"question", "practice", "diagnose", "review", "code_help"}
+        if cleaned in valid_intents:
+            intent = cleaned
+            logger.info("classify_intent 回退文本解析: intent=%s", intent)
+        else:
+            logger.warning("classify_intent JSON 解析失败: %s，原始=%r", e, raw[:100])
+
+    return intent, complexity, token_info
