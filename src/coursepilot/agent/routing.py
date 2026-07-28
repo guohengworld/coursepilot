@@ -17,14 +17,14 @@ logger = logging.getLogger(__name__)
 def route_by_intent(state: dict) -> str:
     """classify 节点后根据 intent + complexity 路由
 
-    P1 增强：复杂问题走 Agentic RAG 循环（retrieve → check → synthesize），
+    P2 增强：复杂问题先分解（decompose → 并行检索 → 质检），
     简单问题走快速通道（query_rag）。
 
     Returns:
         "human_review" — 需要审批的路径
         "get_mastery"  — practice / review（需要掌握度）
         "diagnose"     — diagnose
-        "retrieve"     — complex question / code_help（进入质检循环）
+        "decompose"    — complex question / code_help（先分解再检索）
         "query_rag"    — simple question / code_help（快速通道）
     """
     intent = state.get("intent", "")
@@ -36,7 +36,7 @@ def route_by_intent(state: dict) -> str:
         return "diagnose"          # 诊断只读，无需审批
     elif intent in ("question", "code_help"):
         if complexity == "complex" and rag_config.enable_routing:
-            return "retrieve"      # 复杂 → 进入质检循环
+            return "decompose"      # 复杂 → 先分解再检索
         return "query_rag"         # 简单 → 快速通道
     return "query_rag"
 

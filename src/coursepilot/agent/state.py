@@ -45,6 +45,10 @@ class AgentState(TypedDict):
     sufficiency: dict | None    # check_sufficiency 输出:
                                 #   {"sufficient": bool, "missing_info": str, ...}
 
+    # P2: 查询分解与降级生成
+    sub_queries: list[dict]     # decompose 输出: [{"id":1,"query":"...","target_concept":"..."}]
+    degraded_mode: bool         # True=质检全失败，降级生成（含免责声明）
+
     # 掌握度
     mastery: dict               # get_mastery 输出: {"mastery_level": {...}, "weak_kps": [...]}
 

@@ -1,6 +1,6 @@
 """LangGraph 状态机构建
 
-P1 拓扑（含 Agentic RAG 质检循环）：
+P2 拓扑（含查询分解 + 质检循环 + 降级生成）：
     START → build_context → classify → [route_by_intent]
       ├─ query_rag → [route_after_rag] → finalize → END
       │   └─ (practice/review) → generate_quiz → evaluate_quiz
@@ -8,7 +8,7 @@ P1 拓扑（含 Agentic RAG 质检循环）：
       │            FAIL+retry<2 → generate_quiz (重试)
       │            PASS+practice → create_plan → finalize
       │            PASS+review → review_plan → finalize
-      ├─ retrieve → check_sufficiency → [route_after_check]
+      ├─ decompose → retrieve → check_sufficiency → [route_after_check]
       │   ├─ "synthesize" → [route_after_rag] → (同上)
       │   └─ "retrieve" → retrieve (质检循环, ≤complex_max_rounds 轮)
       ├─ get_mastery → query_rag → (同上)
@@ -26,6 +26,7 @@ from coursepilot.agent.nodes import (
     check_sufficiency_node,
     classify_node,
     create_plan_node,
+    decompose_query_node,
     diagnose_node,
     evaluate_quiz_node,
     finalize_node,
@@ -95,6 +96,8 @@ async def build_agent_graph():
     builder.add_node("retrieve", retrieve_node)
     builder.add_node("check_sufficiency", check_sufficiency_node)
     builder.add_node("synthesize", synthesize_node)
+    # P2: 查询分解
+    builder.add_node("decompose", decompose_query_node)
 
     builder.add_edge(START, "build_context")
     builder.add_edge("build_context", "classify")
@@ -102,11 +105,14 @@ async def build_agent_graph():
     # 条件边: classify → intent + complexity 分发
     builder.add_conditional_edges("classify", route_by_intent, {
         "query_rag": "query_rag",
-        "retrieve": "retrieve",
+        "decompose": "decompose",
         "get_mastery": "get_mastery",
         "diagnose": "diagnose",
         "human_review": "human_review",
     })
+
+    # P2: decompose → retrieve（固定边）
+    builder.add_edge("decompose", "retrieve")
 
     # human_review 批准后继续
     builder.add_conditional_edges("human_review", route_after_review, {

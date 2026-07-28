@@ -13,6 +13,7 @@ from coursepilot.agent.context import build_context as build_context_logic
 from coursepilot.agent.profile_updater import update_profile
 from coursepilot.agent.skills.check_sufficiency import check_sufficiency
 from coursepilot.agent.skills.classify_intent import classify_intent
+from coursepilot.agent.skills.decompose_query import decompose_query
 from coursepilot.agent.skills.diagnose import diagnose, generate_llm_analysis
 from coursepilot.agent.skills.evaluate_quiz import evaluate_quiz
 from coursepilot.agent.skills.generate_quiz import generate_quiz
@@ -129,22 +130,82 @@ async def query_rag_node(state: dict) -> dict:
             rag_config.rerank_top_k = saved_rerank_top_k
 
 
-async def retrieve_node(state: dict) -> dict:
-    """仅执行 RAG 检索，不生成答案。
+async def decompose_query_node(state: dict) -> dict:
+    """复杂查询分解：将多跳问题拆为子问题，供并行检索。"""
+    try:
+        result = await decompose_query(
+            query=state["query"],
+            course_context=state.get("course_context", {}),
+        )
+        sub_queries = result.get("sub_queries", [])
+        dtype = result.get("decomposition_type", "single")
 
-    复杂路径中替代 query_rag_node 的检索部分，
-    结果由 check_sufficiency_node 质检后决定是否生成答案。
+        if sub_queries:
+            logger.info("查询分解 (%s): %d 个子问题", dtype, len(sub_queries))
+            for sq in sub_queries:
+                tc = sq.get("target_concept", "")
+                logger.info("  子问题[%d]: %s (→ %s)", sq["id"], sq["query"], tc)
+
+        return {
+            "sub_queries": sub_queries,
+            "error": None,
+        }
+    except Exception as e:
+        logger.exception("decompose_query_node 异常")
+        return {"sub_queries": [], "error": str(e)}
+
+
+async def retrieve_node(state: dict) -> dict:
+    """RAG 检索（支持并行子问题检索 P2）。
+
+    如果 state 中存在 sub_queries，并行检索每个子问题后合并结果；
+    否则退化为单查询检索。
     """
     try:
         from coursepilot.rag.retriever import Retriever
 
+        sub_queries = state.get("sub_queries", [])
         retriever = Retriever()
         async with async_session_factory() as session:
-            context, metadata = await retriever.retrieve(
-                session, state["query"], state["course_id"],
-            )
+            if sub_queries:
+                # P2: 并行检索多个子问题
+                import asyncio
 
-        source_kp_paths = metadata.get("source_kp_paths", [])
+                async def _retrieve_one(sq: dict) -> tuple[str, dict]:
+                    ctx, meta = await retriever.retrieve(
+                        session, sq["query"], state["course_id"],
+                    )
+                    return ctx, meta
+
+                tasks = [_retrieve_one(sq) for sq in sub_queries]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                contexts = []
+                merged_metadata = {}
+                all_kp_paths = []
+                all_top_uuids = []
+                for i, r in enumerate(results):
+                    if isinstance(r, Exception):
+                        logger.warning("子问题[%d] 检索失败: %s", i + 1, r)
+                        continue
+                    ctx, meta = r
+                    contexts.append(ctx)
+                    all_kp_paths.extend(meta.get("source_kp_paths", []))
+                    all_top_uuids.extend(meta.get("top_uuids", []))
+
+                context = "\n---\n".join(contexts) if contexts else ""
+                merged_metadata = {
+                    "source_kp_paths": all_kp_paths,
+                    "top_uuids": all_top_uuids,
+                    "parallel_count": len(sub_queries),
+                }
+            else:
+                # 单查询检索（含 P1 补搜重试）
+                context, merged_metadata = await retriever.retrieve(
+                    session, state["query"], state["course_id"],
+                )
+
+        source_kp_paths = merged_metadata.get("source_kp_paths", [])
         sources = [{"kp_path": p} for p in source_kp_paths]
 
         retry_count = state.get("retrieval_retry_count", 0)
@@ -153,7 +214,7 @@ async def retrieve_node(state: dict) -> dict:
 
         return {
             "context": context,
-            "retrieved_metadata": metadata,
+            "retrieved_metadata": merged_metadata,
             "sources": sources,
             "error": None,
         }
@@ -185,19 +246,19 @@ async def check_sufficiency_node(state: dict) -> dict:
         if not sufficient and retry_count < max_rounds:
             # 需要补搜
             new_retry = retry_count + 1
+            degraded = False
             logger.info("质检不足 (第%d轮/%d轮): confidence=%.2f, missing=%s",
                         new_retry, max_rounds, confidence, result.get("missing_info", ""))
         else:
             new_retry = retry_count  # 充足或已达上限，不再递增
-            if not sufficient:
-                logger.info("质检不足但已达最大轮数 %d，强制生成", max_rounds)
-
-        # 如果质检告知缺少关键概念，尝试从 metadata 中推测改写方向
-        _missing_info = result.get("missing_info", "")
+            degraded = not sufficient  # 达上限仍不足 → 降级
+            if degraded:
+                logger.warning("质检不足但已达最大轮数 %d，开启降级生成", max_rounds)
 
         return {
             "sufficiency": result,
             "retrieval_retry_count": new_retry,
+            "degraded_mode": degraded,
             "error": None,
         }
     except Exception as e:
@@ -205,6 +266,7 @@ async def check_sufficiency_node(state: dict) -> dict:
         return {
             "sufficiency": {"sufficient": True, "confidence": 0.5, "missing_info": ""},
             "retrieval_retry_count": state.get("retrieval_retry_count", 0),
+            "degraded_mode": False,
             "error": str(e),
         }
 
@@ -212,16 +274,27 @@ async def check_sufficiency_node(state: dict) -> dict:
 async def synthesize_node(state: dict) -> dict:
     """根据已有检索结果生成最终答案。
 
-    复杂路径中替代 query_rag_node 的生成部分。
-    直接调用 Generator.generate()，使用 state 中已存在的 context。
+    如果 degraded_mode=True，在生成时追加免责声明
+    （教材内容不足以完整回答，答案仅供参考）。
     """
     try:
         from coursepilot.rag.generator import Generator
 
         generator = Generator()
+        degraded = state.get("degraded_mode", False)
+
+        # ── 降级模式：在 context 前面加一段说明 ──
+        context = state.get("context", "")
+        if degraded and context:
+            disclaimer = (
+                "[注意] 以下教材内容可能不足以完整回答该问题。"
+                "请结合教材原文和课堂笔记使用，以下回答仅供参考。\n"
+            )
+            context = disclaimer + context
+
         answer, token_info = await generator.generate(
             query=state["query"],
-            context=state.get("context", ""),
+            context=context,
             course_context=state.get("course_context", {}),
             conversation=state.get("conversation"),
             rolling_summary=state.get("rolling_summary", ""),
@@ -229,6 +302,7 @@ async def synthesize_node(state: dict) -> dict:
         )
 
         token_info["routing_complexity"] = "complex"
+        token_info["degraded_mode"] = degraded
         llm_calls = list(state.get("llm_calls", []))
         llm_calls.append({"node": "synthesize", **token_info})
 
