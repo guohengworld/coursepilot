@@ -21,6 +21,7 @@ from coursepilot.agent.skills.get_mastery import get_mastery
 from coursepilot.agent.skills.query_rag import query_rag
 from coursepilot.agent.skills.review_plan import review_plan
 from coursepilot.agent.skills.update_qa_record import update_qa_record
+from coursepilot.agent.skills.web_search import format_web_context, web_search
 from coursepilot.db import async_session_factory
 from coursepilot.models import AgentSession, User
 from coursepilot.rag.config import config as rag_config
@@ -153,6 +154,48 @@ async def decompose_query_node(state: dict) -> dict:
     except Exception as e:
         logger.exception("decompose_query_node 异常")
         return {"sub_queries": [], "error": str(e)}
+
+
+async def web_search_node(state: dict) -> dict:
+    """网络搜索节点：教材检索不足时，最后一次尝试改用网络搜索（P3）。
+
+    1. 从 sufficiency 质检结果中取 missing_info + 用户原问题 拼搜索词
+    2. 搜索 DuckDuckGo，格式化结果追加到现有 context 前
+    3. 结果继续走 check_sufficiency 质检
+    """
+    try:
+        query = state["query"]
+        sufficiency = state.get("sufficiency", {})
+        missing_info = sufficiency.get("missing_info", "")
+
+        # 拼搜索词
+        search_query = query
+        if missing_info:
+            search_query = f"{missing_info} {query}"
+
+        results = await web_search(search_query, top_k=5)
+        if not results:
+            logger.info("web_search 无结果，跳过")
+            return {"error": None}  # 无搜索结果，但不上报错误
+
+        web_context = format_web_context(results, query)
+
+        # 追加到现有 context 之前
+        existing_context = state.get("context", "")
+        if existing_context:
+            new_context = web_context + "\n\n" + existing_context
+        else:
+            new_context = web_context
+
+        logger.info("web_search: 结果追加到 context (+%d chars)", len(web_context))
+
+        return {
+            "context": new_context,
+            "error": None,
+        }
+    except Exception as e:
+        logger.exception("web_search_node 异常")
+        return {"error": str(e)}
 
 
 async def retrieve_node(state: dict) -> dict:

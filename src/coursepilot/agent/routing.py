@@ -63,15 +63,20 @@ def route_after_rag(state: dict) -> str:
 
 
 def route_after_check(state: dict) -> str:
-    """check_sufficiency 节点后判断：补搜 or 生成
+    """check_sufficiency 节点后判断：补搜 / 网络搜索 / 生成
+
+    P3 新增：最后一次补搜改为网络搜索，教材覆盖不到时走备用知识源。
 
     逻辑：
-    - 质检不足 且 retry_count < complex_max_rounds → "retrieve"（继续补搜）
-    - 质检通过 或 已达最大轮数 → "synthesize"（生成答案）
+    - 质检通过 → "synthesize"
+    - 不足 且 retry < max_rounds-1 → "retrieve"（RAG 补搜）
+    - 不足 且 retry == max_rounds-1 → "web_search"（最后一轮：网络搜索）
+    - 不足 且 retry >= max_rounds → "synthesize"（强制生成）
 
     Returns:
-        "retrieve"   — 回到 retrieve_node 继续补搜
-        "synthesize" — 进入 synthesize_node 生成答案
+        "retrieve"    — 回到 retrieve_node 继续 RAG 补搜
+        "web_search"  — 走 web_search_node 尝试网络搜索
+        "synthesize"  — 进入 synthesize_node 生成答案
     """
     sufficiency = state.get("sufficiency", {})
     retry_count = state.get("retrieval_retry_count", 0)
@@ -80,9 +85,13 @@ def route_after_check(state: dict) -> str:
     if sufficiency.get("sufficient", True):
         return "synthesize"
 
-    if retry_count < max_rounds:
-        logger.debug("质检不足 (retry=%d/%d)，继续补搜", retry_count, max_rounds)
+    if retry_count < max_rounds - 1:
+        logger.debug("质检不足 (retry=%d/%d)，RAG 补搜", retry_count, max_rounds)
         return "retrieve"
+
+    if retry_count < max_rounds:
+        logger.debug("质检不足 (retry=%d/%d)，最后一次尝试网络搜索", retry_count, max_rounds)
+        return "web_search"
 
     logger.debug("已达最大补搜轮数 %d，强制生成", max_rounds)
     return "synthesize"

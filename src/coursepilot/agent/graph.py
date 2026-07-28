@@ -1,6 +1,6 @@
 """LangGraph 状态机构建
 
-P2 拓扑（含查询分解 + 质检循环 + 降级生成）：
+P3 拓扑（含查询分解 + 质检循环 + 网络搜索兜底 + 降级生成）：
     START → build_context → classify → [route_by_intent]
       ├─ query_rag → [route_after_rag] → finalize → END
       │   └─ (practice/review) → generate_quiz → evaluate_quiz
@@ -10,7 +10,8 @@ P2 拓扑（含查询分解 + 质检循环 + 降级生成）：
       │            PASS+review → review_plan → finalize
       ├─ decompose → retrieve → check_sufficiency → [route_after_check]
       │   ├─ "synthesize" → [route_after_rag] → (同上)
-      │   └─ "retrieve" → retrieve (质检循环, ≤complex_max_rounds 轮)
+      │   ├─ "retrieve" → retrieve (RAG补搜, ≤max_rounds-2 轮)
+      │   └─ "web_search" → web_search → check_sufficiency (最后一轮)
       ├─ get_mastery → query_rag → (同上)
       └─ diagnose → finalize → END
 """
@@ -37,6 +38,7 @@ from coursepilot.agent.nodes import (
     retrieve_node,
     review_plan_node,
     synthesize_node,
+    web_search_node,
 )
 from coursepilot.agent.routing import (
     route_after_check,
@@ -98,6 +100,8 @@ async def build_agent_graph():
     builder.add_node("synthesize", synthesize_node)
     # P2: 查询分解
     builder.add_node("decompose", decompose_query_node)
+    # P3: 网络搜索（教材覆盖不到的备用知识源）
+    builder.add_node("web_search", web_search_node)
 
     builder.add_edge(START, "build_context")
     builder.add_edge("build_context", "classify")
@@ -134,12 +138,17 @@ async def build_agent_graph():
     builder.add_edge("retrieve", "check_sufficiency")
 
     # check_sufficiency → 质检结果路由
-    # 不足且未达上限 → 回 retrieve 补搜
-    # 充足或已达上限 → synthesize 生成答案
+    # 不足 + 预留给 RAG → retrieve
+    # 不足 + 最后一轮 → web_search
+    # 充足或耗尽 → synthesize
     builder.add_conditional_edges("check_sufficiency", route_after_check, {
         "retrieve": "retrieve",
+        "web_search": "web_search",
         "synthesize": "synthesize",
     })
+
+    # P3: web_search → 回到 check_sufficiency 继续质检
+    builder.add_edge("web_search", "check_sufficiency")
 
     # synthesize → 同 query_rag 一样，按 intent 决定是否继续出题
     builder.add_conditional_edges("synthesize", route_after_rag, {
