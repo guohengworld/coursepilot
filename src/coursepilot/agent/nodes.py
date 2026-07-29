@@ -391,35 +391,37 @@ async def finalize_node(state: dict) -> dict:
         async with async_session_factory() as session:
             # ── Step B: Audit 日志（独立 session 但复用同一个也可） ──
             from coursepilot.governance.audit import log_agent_chat, log_guardrail_violation
-            # audit 用独立 session 以免回滚影响主流程
-            # 但这里已经在用 async_session_factory 了，可以直接调用
 
-            # ── Step C: 写入 QA Record ──
-            qa_record = await update_qa_record(
-                session=session,
-                user_id=state["user_id"],
-                course_id=state["course_id"],
-                query=state["query"],
-                answer=state.get("answer", ""),
-                kp_path=_first_kp_path(state.get("retrieved_metadata", {})),
-                retrieved_units=state.get("retrieved_metadata", {}).get("top_uuids", []),
-                citations=state.get("sources", []),
-                session_id=state["session_id"],
-                token_count=total_tokens,
-                prompt_tokens=total_prompt,
-                completion_tokens=total_completion,
-            )
+            # ── Step C: 写入 QA Record（仅在 session_id 有效时） ──
+            session_id = state.get("session_id", "")
+            if session_id:
+                await update_qa_record(
+                    session=session,
+                    user_id=state["user_id"],
+                    course_id=state["course_id"],
+                    query=state["query"],
+                    answer=state.get("answer", ""),
+                    kp_path=_first_kp_path(state.get("retrieved_metadata", {})),
+                    retrieved_units=state.get("retrieved_metadata", {}).get("top_uuids", []),
+                    citations=state.get("sources", []),
+                    session_id=session_id,
+                    token_count=total_tokens,
+                    prompt_tokens=total_prompt,
+                    completion_tokens=total_completion,
+                )
 
-            # ── Step D: 更新会话状态（含 L1/L2 记忆） ──
-            agent_session = await _update_session_intent(
-                session, state["session_id"],
-                state.get("intent", "question"),
-                human_review_result=state.get("human_review_result"),
-                quiz_data=state.get("quiz_data"),
-                answer=state.get("answer", ""),
-                sources=state.get("sources", []),
-                query=state.get("query", ""),
-            )
+            # ── Step D: 更新会话状态（含 L1/L2 记忆，仅在 session_id 有效时） ──
+            agent_session = None
+            if session_id:
+                agent_session = await _update_session_intent(
+                    session, session_id,
+                    state.get("intent", "question"),
+                    human_review_result=state.get("human_review_result"),
+                    quiz_data=state.get("quiz_data"),
+                    answer=state.get("answer", ""),
+                    sources=state.get("sources", []),
+                    query=state.get("query", ""),
+                )
 
             # 滚动压缩：当 L1 过长时，把老轮次压缩进 rolling_summary
         compaction_count = state.get("compaction_count", 0)
@@ -490,7 +492,6 @@ async def finalize_node(state: dict) -> dict:
 
         # ── Step I: 同步触发一次 QA embedding 补全（P4） ──
         try:
-            from coursepilot.agent.memory import ensure_qa_embeddings
             asyncio.create_task(ensure_qa_embeddings_for_user_course(
                 user_id=state["user_id"],
                 course_id=state["course_id"],

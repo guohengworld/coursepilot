@@ -150,14 +150,37 @@ async def check_sufficiency(
         }
 
     except (json.JSONDecodeError, Exception) as e:
-        logger.warning("check_sufficiency LLM 判断异常: %s，默认视为充足", e)
+        # 尝试用正则从 LLM 返回文本中提取关键字段
+        logger.warning("check_sufficiency LLM 判断 JSON 解析失败: %s，尝试正则救回", e)
+        salvaged = _salvage_llm_json(raw) if raw else None
+        if salvaged:
+            logger.info("check_sufficiency 正则救回成功: %s", salvaged)
+            return salvaged
+        logger.warning("check_sufficiency 正则救回也失败，返回默认")
         return _default_sufficient()
+
+
+def _salvage_llm_json(raw: str) -> dict[str, Any] | None:
+    """当 LLM 返回的 JSON 不完整时，用正则提取关键字段"""
+    sufficient_match = re.search(r'"sufficient"\s*:\s*(true|false)', raw, re.IGNORECASE)
+    confidence_match = re.search(r'"confidence"\s*:\s*([\d.]+)', raw)
+    if not sufficient_match:
+        return None
+    sufficient = sufficient_match.group(1).lower() == "true"
+    confidence = float(confidence_match.group(1)) if confidence_match else 0.6
+    return {
+        "sufficient": sufficient,
+        "confidence": confidence,
+        "missing_info": "LLM 返回不完整，已通过正则提取",
+        "covered_aspects": [],
+        "uncovered_aspects": ["可能需要更多信息"],
+    }
 
 
 def _default_sufficient() -> dict[str, Any]:
     return {
         "sufficient": True,
-        "confidence": 0.6,
+        "confidence": 0.7,
         "missing_info": "",
         "covered_aspects": [],
         "uncovered_aspects": [],

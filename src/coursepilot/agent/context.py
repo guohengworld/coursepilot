@@ -20,7 +20,10 @@ def _first_profile(result, uid: str, cid: str) -> dict | None:
     if not rows:
         return None
     if len(rows) > 1:
-        logger.warning("发现 %d 条 UserProfile 重复记录 user=%s course=%s，取第一条", len(rows), uid, cid)
+        logger.warning(
+            "发现 %d 条 UserProfile 重复记录 user=%s course=%s，取第一条",
+            len(rows), uid, cid,
+        )
     p = rows[0]
     return {
         "mastery_level": p.mastery_level,
@@ -39,15 +42,27 @@ async def build_context(
 
     :returns: (course_context, user_profile_summary, recent_qa_list)
     """
+    # 尝试解析 UUID，无效时返回空默认值（eval/test 场景）
+    try:
+        uid = UUID(user_id)
+        cid = UUID(course_id)
+    except (ValueError, TypeError):
+        logger.warning("build_context: 无效的 UUID user_id=%s course_id=%s", user_id, course_id)
+        if _is_valid_uuid(course_id):
+            course_ctx = await build_course_context(session, UUID(course_id))
+        else:
+            course_ctx = {}
+        return course_ctx, None, []
+
     # 1. 课程上下文（KP树大纲 + 教材名）
-    course_ctx = await build_course_context(session, UUID(course_id))
+    course_ctx = await build_course_context(session, cid)
 
     # 2. 学生画像（处理 duplicates 避免 MultipleResultsFound）
     profile = None
     result = await session.execute(
         select(UserProfile).where(
-            UserProfile.user_id == UUID(user_id),
-            UserProfile.course_id == UUID(course_id)
+            UserProfile.user_id == uid,
+            UserProfile.course_id == cid
         )
     )
     profile = _first_profile(result, user_id, course_id)
@@ -55,8 +70,8 @@ async def build_context(
     # 3. 最近 5 条问答（截断答案避免上下文膨胀）
     result = await session.execute(
         select(QARecord).where(
-            QARecord.user_id == UUID(user_id),
-            QARecord.course_id == UUID(course_id)
+            QARecord.user_id == uid,
+            QARecord.course_id == cid
         )
         .order_by(desc(QARecord.created_at))
         .limit(5)
@@ -67,4 +82,12 @@ async def build_context(
     ]
 
     return course_ctx, profile, recent_qa
+
+
+def _is_valid_uuid(s: str) -> bool:
+    try:
+        UUID(s)
+        return True
+    except (ValueError, TypeError):
+        return False
 
