@@ -22,12 +22,17 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from coursepilot.config import settings
 
 from coursepilot.mcp.shared.schemas import (
+    DiagnoseParams,
     GeneratePracticeParams,
+    GetReviewPlanParams,
+    GetKPTreeParams,
     GradeAnswersParams,
     QueryKnowledgeParams,
+    SearchKnowledgeUnitsParams,
 )
+from coursepilot.mcp.tools.knowledge import get_kp_tree, search_knowledge_units
 from coursepilot.mcp.tools.practice import generate_practice, grade_answers
-from coursepilot.mcp.tools.tutor import query_knowledge
+from coursepilot.mcp.tools.tutor import diagnose, get_review_plan, query_knowledge
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,6 +106,86 @@ async def grade_answers_tool(params: GradeAnswersParams) -> CallToolResult:
     [6-输出格式] 返回批改结果、正确答案、解析和涉及知识点。
     """
     return await grade_answers(params)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="学情诊断",
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+)
+async def diagnose_tool(params: DiagnoseParams) -> CallToolResult:
+    """[1-用途] 分析学生练习记录，识别薄弱知识点。
+    [2-限制] 需要学生已有 PracticeRecord 数据。
+    [3-成本] 低，仅聚合统计。
+    [4-副作用] 无，只读工具。
+    [5-输入格式] user_id: 学生 UUID；course_id: 课程 UUID。
+    [6-输出格式] 返回薄弱知识点、各 KP 统计、总练习量和整体正确率。
+    """
+    return await diagnose(params)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="生成复习计划",
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=False,
+    )
+)
+async def get_review_plan_tool(params: GetReviewPlanParams) -> CallToolResult:
+    """[1-用途] 基于诊断结果生成并持久化复习计划。
+    [2-限制] 需要先有练习记录。
+    [3-成本] 中，需要调用一次 LLM。
+    [4-副作用] 会写入 ReviewPlan 表。
+    [5-输入格式] user_id: 学生 UUID；course_id: 课程 UUID。
+    [6-输出格式] 返回复习计划项、总数、摘要和 plan_id。
+    """
+    return await get_review_plan(params)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="检索知识单元",
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+)
+async def search_knowledge_units_tool(params: SearchKnowledgeUnitsParams) -> CallToolResult:
+    """[1-用途] 从课程教材中检索相关知识单元。
+    [2-限制] 仅检索指定 course_id 下的内容。
+    [3-成本] 低，走检索管线，不调用 LLM。
+    [4-副作用] 无，只读工具。
+    [5-输入格式] query: 检索文本；course_id: 课程 UUID；top_k: 返回条数。
+    [6-输出格式] 返回知识单元列表。
+    """
+    return await search_knowledge_units(params)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="获取知识点树",
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
+    )
+)
+async def get_kp_tree_tool(params: GetKPTreeParams) -> CallToolResult:
+    """[1-用途] 列出课程的全部知识点路径。
+    [2-限制] 仅返回指定 course_id 下的知识点。
+    [3-成本] 低，仅查数据库。
+    [4-副作用] 无，只读工具。
+    [5-输入格式] course_id: 课程 UUID。
+    [6-输出格式] 返回知识点路径列表。
+    """
+    return await get_kp_tree(params)
 
 
 def main() -> None:

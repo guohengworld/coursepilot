@@ -79,6 +79,10 @@ def test_tools_list(mcp_server):
     assert "query_knowledge_tool" in tool_names
     assert "generate_practice_tool" in tool_names
     assert "grade_answers_tool" in tool_names
+    assert "diagnose_tool" in tool_names
+    assert "get_review_plan_tool" in tool_names
+    assert "search_knowledge_units_tool" in tool_names
+    assert "get_kp_tree_tool" in tool_names
 
 
 def test_tools_have_annotations(mcp_server):
