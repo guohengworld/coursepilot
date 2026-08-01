@@ -81,6 +81,7 @@ class TestGeneratePracticeParams:
 class TestGradeAnswersParams:
     def test_valid(self):
         params = GradeAnswersParams(
+            user_id=uuid.uuid4(),
             question_id=uuid.uuid4(),
             answer="A",
         )

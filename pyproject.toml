@@ -70,7 +70,7 @@ dependencies = [
     "loguru>=0.7,<1",
     "rich>=13.0,<15",
     "streamlit>=1.40,<2",
-    "mcp>=1,<2",
+    "mcp>=2.0.0",
 ]
 
 [dependency-groups]
@@ -100,6 +100,7 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+addopts = "-p no:phoenix -p no:pydantic_ai"
 markers = [
     "e2e: 端到端测试（全 mock 外部依赖）",
 ]

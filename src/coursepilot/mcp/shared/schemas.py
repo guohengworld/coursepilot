@@ -88,6 +88,7 @@ class GeneratePracticeParams(BaseToolParams):
 class GradeAnswersParams(BaseToolParams):
     """grade_answers 工具参数。"""
 
+    user_id: UUID = Field(..., description="学生 UUID")
     question_id: UUID = Field(..., description="题目 UUID")
     answer: str = Field(..., min_length=1, max_length=16, description="学生答案")
 
