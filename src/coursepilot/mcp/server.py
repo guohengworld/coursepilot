@@ -1,6 +1,6 @@
-"""CoursePilot MCP Server - v2 SDK 实现。
+"""CoursePilot MCP Server - 基于 mcp v2 SDK（MCPServer）。
 
-基于 mcp.server.MCPServer 将教学能力暴露为 Tools。
+将教学能力暴露为 Tools、Resources 和 Prompts。
 
 传输协议：
     stdio（默认，供 WorkBuddy / Trae 嵌入使用）
@@ -17,15 +17,34 @@ import argparse
 import logging
 
 from mcp.server import MCPServer
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from mcp.types import (
+    CallToolResult,
+    GetPromptResult,
+    PromptMessage,
+    TextContent,
+    TextResourceContents,
+    ToolAnnotations,
+)
 
 from coursepilot.config import settings
 
+from coursepilot.mcp.prompts import (
+    diagnosis_report,
+    quiz_blueprint,
+    tutor_socratic,
+)
+from coursepilot.mcp.resources.course import (
+    read_documents,
+    read_kp_tree,
+    read_mastery,
+    read_report,
+    read_stats,
+)
 from coursepilot.mcp.shared.schemas import (
     DiagnoseParams,
     GeneratePracticeParams,
-    GetReviewPlanParams,
     GetKPTreeParams,
+    GetReviewPlanParams,
     GradeAnswersParams,
     QueryKnowledgeParams,
     SearchKnowledgeUnitsParams,
@@ -44,9 +63,104 @@ mcp = MCPServer(
 )
 
 
-def _make_error(text: str) -> CallToolResult:
-    return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Resources
+# ═══════════════════════════════════════════════════════════════════════════════
 
+@mcp.resource(
+    uri="course://{course_id}/kp-tree",
+    name="课程知识点树",
+    description="列出指定课程的全部知识点路径",
+    mime_type="application/json",
+)
+async def read_course_kp_tree_resource(course_id: str) -> str:
+    """读取课程知识点树资源。"""
+    return await read_kp_tree(course_id)
+
+
+@mcp.resource(
+    uri="course://{course_id}/documents",
+    name="课程文档清单",
+    description="列出指定课程的教材文档及处理状态",
+    mime_type="application/json",
+)
+async def read_course_documents_resource(course_id: str) -> str:
+    """读取课程文档清单资源。"""
+    return await read_documents(course_id)
+
+
+@mcp.resource(
+    uri="course://{course_id}/stats",
+    name="课程统计",
+    description="统计指定课程的知识点、知识单元和文档数量",
+    mime_type="application/json",
+)
+async def read_course_stats_resource(course_id: str) -> str:
+    """读取课程统计资源。"""
+    return await read_stats(course_id)
+
+
+@mcp.resource(
+    uri="student://{user_id}/{course_id}/report",
+    name="学生学情报告",
+    description="返回学生在某课程下的综合学情报告（MVP 简化版）",
+    mime_type="application/json",
+)
+async def read_student_report_resource(user_id: str, course_id: str) -> str:
+    """读取学生学情报告资源。"""
+    return await read_report(user_id, course_id)
+
+
+@mcp.resource(
+    uri="student://{user_id}/{course_id}/mastery",
+    name="学生掌握度画像",
+    description="返回学生在某课程下的掌握度画像（MVP 简化版）",
+    mime_type="application/json",
+)
+async def read_student_mastery_resource(user_id: str, course_id: str) -> str:
+    """读取学生掌握度画像资源。"""
+    return await read_mastery(user_id, course_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Prompts
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@mcp.prompt(
+    name="tutor_socratic",
+    description="苏格拉底式辅导系统提示。适用于引导学生自己推导出答案。",
+)
+async def tutor_socratic_prompt(course_id: str, kp_path: str) -> GetPromptResult:
+    """返回苏格拉底式辅导 Prompt。"""
+    return tutor_socratic.render(course_id, kp_path)
+
+
+@mcp.prompt(
+    name="quiz_blueprint",
+    description="出题蓝图系统提示。适用于生成结构化练习题。",
+)
+async def quiz_blueprint_prompt(
+    course_id: str,
+    kp_path: str,
+    count: int = 3,
+    difficulty: int = 3,
+) -> GetPromptResult:
+    """返回出题蓝图 Prompt。"""
+    return quiz_blueprint.render(course_id, kp_path, count, difficulty)
+
+
+@mcp.prompt(
+    name="diagnosis_report",
+    description="诊断报告生成系统提示。适用于根据练习数据生成学情分析。",
+)
+async def diagnosis_report_prompt(user_id: str, course_id: str) -> GetPromptResult:
+    """返回诊断报告 Prompt。"""
+    return diagnosis_report.render(user_id, course_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tools
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool(
     annotations=ToolAnnotations(

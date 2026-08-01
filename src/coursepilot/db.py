@@ -1,7 +1,8 @@
 """异步数据库引擎与会话管理
 
 引擎采用懒加载（lazy init），避免模块导入时触发 asyncpg 加载。
-这解决了 Windows 上僵尸进程锁住 asyncpg DLL 导致导入挂死的问题。
+Windows WMI 死锁修复已在 coursepilot/__init__.py 顶部统一处理
+（必须在 import sqlalchemy 之前生效），此处无需重复。
 """
 from __future__ import annotations
 
@@ -16,33 +17,6 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 from coursepilot.config import settings
-
-
-# ── Windows WMI 兼容 ──────────────────────────────────────
-# asyncpg.compat 在模块级别调用 platform.uname()，该函数通过 WMI 查询
-# 系统信息。在某些 Windows 环境下 WMI 可能死锁，导致 import asyncpg 永久挂死。
-# 此处提前缓存 platform.uname() 结果，避免后续 WMI 调用。
-import platform as _platform
-
-_UNAME_CACHED = None
-
-
-def _safe_uname():
-    global _UNAME_CACHED
-    if _UNAME_CACHED is None:
-        try:
-            _UNAME_CACHED = _platform.uname()
-        except Exception:
-            # 兜底：WMI 不可用时返回模拟值
-            import collections
-            _UNAME_CACHED = collections.namedtuple(
-                "uname_result", "system node release version machine"
-            )("Windows", "localhost", "10", "10.0.19045", "AMD64")
-    return _UNAME_CACHED
-
-
-# 必须 asyncpg.compat 加载前把 uname 换成缓存版本
-_platform.uname = _safe_uname
 
 
 class Base(DeclarativeBase):
