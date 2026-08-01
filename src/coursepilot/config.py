@@ -79,6 +79,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_seconds: int = 86400  # 24 小时
 
+    # ── MCP ────────────────────────────────────────────
+    mcp_transport: str = "stdio"  # stdio / http
+    mcp_gateway: str = "https://mcp.coursepilot.example.com/mcp"
+    mcp_api_key: str = ""  # MVP 阶段轻量认证
+    mcp_host: str = "0.0.0.0"
+    mcp_port: int = 8080
+    mcp_protocol_version: str = "2025-06-18"
+
     # ── 学情诊断 ───────────────────────────────────────
     diagnose_weak_threshold: float = 0.6   # 正确率低于此值视为薄弱
     diagnose_lookback_days: int = 90       # 分析最近 N 天的做题记录
