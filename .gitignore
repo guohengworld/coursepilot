@@ -13,7 +13,7 @@ build/
 .idea/
 .workbuddy/
 .agents/
-Logs/
+Logs
 parsed/
 src/coursepilot/parsed/
 frontend/.vscode/
@@ -22,3 +22,17 @@ docs/*.pdf
 eval/reports/
 tests/fixtures/pdfs/
 tests/fixtures/exported_units.json
+
+# 本地 IDE / Agent 配置
+.claude/
+
+# 日志与运行时临时产物
+*.log
+_test_results/
+*.patch
+
+# 运行时导出的知识点数据（含真实 course_id / kp_id，不宜公开）
+eval/questions/exported_units.json
+
+# MCP 内部设计文档（暂不公开）
+docs/mcp/

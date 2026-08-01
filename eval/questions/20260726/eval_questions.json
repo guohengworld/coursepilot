@@ -1,0 +1,477 @@
+[
+  {
+    "question": "量子纠缠在量子通信中的具体作用是什么？",
+    "answer": "教材未涉及此内容，无法回答",
+    "ground_truth_contexts": [],
+    "question_type": "unanswerable",
+    "kp_path": "",
+    "unanswerable": true,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "如何使用BERT模型进行中文情感分类？",
+    "answer": "教材未涉及此内容，无法回答",
+    "ground_truth_contexts": [],
+    "question_type": "unanswerable",
+    "kp_path": "",
+    "unanswerable": true,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "递归神经网络LSTM如何解决梯度消失问题？",
+    "answer": "教材未涉及此内容，无法回答",
+    "ground_truth_contexts": [],
+    "question_type": "unanswerable",
+    "kp_path": "",
+    "unanswerable": true,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "Python中装饰器@staticmethod和@classmethod的区别是什么？",
+    "answer": "教材未涉及此内容，无法回答",
+    "ground_truth_contexts": [],
+    "question_type": "unanswerable",
+    "kp_path": "",
+    "unanswerable": true,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "Fermat定理和Lagrange中值定理有什么区别和联系？",
+    "answer": "Fermat定理是Lagrange中值定理的基础，它给出了函数在极值点处导数为零的条件；而Lagrange中值定理则推广了Fermat定理，它断言在区间内存在一点使得该点导数等于区间两端点函数值差与区间长度之比。两者的联系在于Lagrange中值定理的证明中常常需要构造辅助函数并应用Fermat定理。但根据当前教材内容，未直接给出Lagrange中值定理的完整叙述，因此无法详细比较。",
+    "ground_truth_contexts": [
+      "94af1f24-e862-4f37-a587-02b67564fbd1",
+      "b0502d01-a10b-46f6-9753-d6ca29edd53c"
+    ],
+    "question_type": "comparison",
+    "kp_path": "微积分/第4章微分中值定理与导数的应用",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "L'Hospital法则与Taylor公式在极限计算中的应用有什么区别和联系？",
+    "answer": "L'Hospital法则适用于未定式极限，通过分别求分子分母的导数再求极限；Taylor公式则通过将函数展开为多项式来近似计算极限，常用于处理复杂函数。两者的联系在于它们都可以用于求解极限，但L'Hospital法则更直接，而Taylor公式能提供更精确的误差估计。",
+    "ground_truth_contexts": [
+      "cab2aa5d-8e87-4277-a74a-c38d96dae413",
+      "cf006543-051f-4d7e-bcce-216d068ede50"
+    ],
+    "question_type": "comparison",
+    "kp_path": "微积分/第4章微分中值定理与导数的应用/4.2 L'Hospital 法则",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "函数的单调性与凸性有什么区别和联系？",
+    "answer": "单调性描述函数值随自变量增加而增加或减少的趋势，由一阶导数的符号决定；凸性描述函数曲线的弯曲方向，由二阶导数的符号决定。两者的联系在于它们都是通过导数来研究函数性态，且单调性研究是凸性研究的基础。",
+    "ground_truth_contexts": [
+      "e33622c6-5bfd-4e5c-ae44-a199bdea8a64",
+      "6290eb81-4c3f-4475-86bd-772d51dc6191"
+    ],
+    "question_type": "comparison",
+    "kp_path": "微积分/第4章微分中值定理与导数的应用/4.4 利用导数研究函数性态",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "曲率和曲率半径有什么区别和联系？",
+    "answer": "曲率K描述曲线在某点弯曲的程度，曲率半径R定义为R=1/K，表示该点处曲率圆的半径。两者的联系在于曲率半径是曲率的倒数，曲率越大则曲率半径越小。",
+    "ground_truth_contexts": [
+      "9766522d-546b-4495-afd0-867ccfbbc52d"
+    ],
+    "question_type": "comparison",
+    "kp_path": "微积分/第4章微分中值定理与导数的应用/4.5 平面曲线的曲率/4.5.2曲率和曲率公式",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "导函数具有介值性与一般函数连续时具有介值性有什么区别和联系？",
+    "answer": "导函数具有介值性不需要附加连续性条件，而一般函数必须连续才能保证具有介值性。两者的联系在于都涉及介值性质，但导函数的介值性是其特有的性质。",
+    "ground_truth_contexts": [
+      "2041474e-6205-4fdb-a04d-c504f287bdb2"
+    ],
+    "question_type": "comparison",
+    "kp_path": "微积分/第4章微分中值定理与导数的应用/4.1 微分中值定理/4.1.1 Fermat 定理",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "L'Hospital法则中，双侧极限与单侧极限有什么区别和联系？",
+    "answer": "L'Hospital法则对双侧极限成立，若函数只定义在单侧邻域，则只需将条件改为在该单侧邻域上成立，结论中的极限改为单侧极限，定理仍然成立。两者的联系在于单侧极限是双侧极限的推广，形式类似。",
+    "ground_truth_contexts": [
+      "c1225e21-64e0-44cb-ac9a-cb6509ad06b2"
+    ],
+    "question_type": "comparison",
+    "kp_path": "微积分/第4章微分中值定理与导数的应用/4.2 L'Hospital 法则",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "试证：当 $|q| < 1$ 时， $\\lim\\limits_{n \\to \\infty} q^n = 0$。",
+    "answer": "证明：$\\forall \\varepsilon > 0$（不妨设 $\\varepsilon < 1$），要使 $|q^n - 0| < \\varepsilon$，只要 $|q|^n < \\varepsilon$，即 $n > \\log_{|q|} \\varepsilon$。于是取 $N = [ \\log_{|q|} \\varepsilon ]$，则当 $n > N$ 时，就有 $n > \\log_{|q|} \\varepsilon$，从而有 $|q^n - 0| < \\varepsilon$。所以 $\\lim\\limits_{n \\to \\infty} q^n = 0$。",
+    "ground_truth_contexts": [
+      "a2b74c74-d865-4585-aefa-97618c1543b0"
+    ],
+    "question_type": "calculation",
+    "kp_path": "微积分/第2章 极限与连续/2.1 数列的极限/2.1.2 数列极限的定义",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "数列 $x_n = \\sqrt{2 + \\sqrt{2 + \\cdots + \\sqrt{2 + \\sqrt{2}}}}$ (n重根号)，试求其极限。",
+    "answer": "此类问题首先应讨论极限的存在性。该数列单调增加且有界，故极限存在。设 $\\lim\\limits_{n \\to \\infty} x_n = A$。由于 $x_{n+1} = \\sqrt{2 + x_n}$，令 $n \\to \\infty$，可得 $A = \\sqrt{2 + A}$。解此方程得 $A^2 = 2 + A$，即 $A^2 - A - 2 = 0$，解得 $A = 2$ 或 $A = -1$。因为 $x_n > 0$，根据极限保号性 $A \\geq 0$，故舍去 $A = -1$。所以 $\\lim\\limits_{n \\to \\infty} x_n = 2$。",
+    "ground_truth_contexts": [
+      "0cf0bf68-9df3-4994-8ba1-00deb84f6d66"
+    ],
+    "question_type": "calculation",
+    "kp_path": "微积分/第2章 极限与连续/2.1 数列的极限/2.1.2 数列极限的定义",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "计算极限 $\\lim\\limits_{n\\to\\infty} \\left(1 - \\frac{1}{n}\\right)^n$。",
+    "answer": "由教材中的推导：$\\lim\\limits_{n\\to\\infty} \\left(1 - \\frac{1}{n}\\right)^n = \\lim\\limits_{n\\to\\infty} \\frac{1}{\\left(\\frac{n}{n-1}\\right)^n} = \\lim\\limits_{n\\to\\infty} \\frac{1}{\\left(1 + \\frac{1}{n-1}\\right)^{n-1}} \\cdot \\frac{n-1}{n} = \\frac{1}{\\mathrm{e}} \\cdot 1 = \\mathrm{e}^{-1}$。",
+    "ground_truth_contexts": [
+      "e1759556-87c5-4d80-a56a-10a0ff7d7a88"
+    ],
+    "question_type": "calculation",
+    "kp_path": "微积分/第2章 极限与连续/2.3 数列极限存在的判别法/2.3.2 单调有界数列极限存在定理",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "计算极限 $\\lim\\limits_{x\\to 0} \\frac{\\sin 5x}{\\arctan 3x}$。",
+    "answer": "根据教材中的计算，利用等价无穷小代换：当 $x\\to 0$ 时，$\\sin 5x \\sim 5x$，$\\arctan 3x \\sim 3x$，因此 $\\lim\\limits_{x\\to 0} \\frac{\\sin 5x}{\\arctan 3x} = \\lim\\limits_{x\\to 0} \\frac{5x}{3x} = \\frac{5}{3}$。",
+    "ground_truth_contexts": [
+      "3bdd8a3e-c216-4e4a-b2bb-d91e8c707928"
+    ],
+    "question_type": "calculation",
+    "kp_path": "微积分/第2章 极限与连续/2.4 函数的极限/2.4.4 无穷小的比较",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "讨论函数 $y = x^{\\frac{1}{3}}$ 在 $x = 0$ 处的可导性。",
+    "answer": "计算增量：$\\Delta y = f(0+\\Delta x) - f(0) = (\\Delta x)^{\\frac{1}{3}}$。计算差商：$\\frac{\\Delta y}{\\Delta x} = \\frac{(\\Delta x)^{\\frac{1}{3}}}{\\Delta x} = \\frac{1}{(\\Delta x)^{\\frac{2}{3}}}$。取极限：$\\lim\\limits_{\\Delta x \\to 0} \\frac{\\Delta y}{\\Delta x} = \\lim\\limits_{\\Delta x \\to 0} \\frac{1}{(\\Delta x)^{\\frac{2}{3}}} = +\\infty$。由于极限为无穷大，故知函数 $y = x^{\\frac{1}{3}}$ 在 $x = 0$ 处不可导。根据导数的定义，此时 $f'(x_0)$ 不存在，但习惯上可称函数 $y = f(x)$ 在该点的导数为无穷大，记作 $f'(x_0) = \\infty$。",
+    "ground_truth_contexts": [
+      "62d674ec-5c2b-4ff7-a065-64454e989a60"
+    ],
+    "question_type": "calculation",
+    "kp_path": "微积分/第3章 导数与微分/3.1 导数的概念/3.1.2 导数的定义",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "求常数函数 $y=c$ 在点 $x \\in \\mathbb{R}$ 的导数。",
+    "answer": "计算函数增量：$\\Delta f = f(x + \\Delta x) - f(x) = c - c = 0$。根据导数定义，$f'(x) = \\lim\\limits_{\\Delta x \\to 0} \\frac{\\Delta f}{\\Delta x} = 0$。即常数函数的导数为零，记作 $(c)' = 0$。",
+    "ground_truth_contexts": [
+      "8acca03a-7024-4d28-a495-2a4b40ab7d6a"
+    ],
+    "question_type": "calculation",
+    "kp_path": "微积分/第3章 导数与微分/3.1 导数的概念/3.1.2 导数的定义",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "求极限 $\\lim\\limits_{n\\to\\infty} \\frac{1^2 + 2^2 + \\cdots + n^2}{n^3}$。",
+    "answer": "利用平方和公式 $1^2 + 2^2 + \\cdots + n^2 = \\frac{n(n+1)(2n+1)}{6}$，则原式 $= \\lim\\limits_{n\\to\\infty} \\frac{n(n+1)(2n+1)}{6n^3} = \\lim\\limits_{n\\to\\infty} \\frac{(1+\\frac{1}{n})(2+\\frac{1}{n})}{6} = \\frac{1 \\times 2}{6} = \\frac{1}{3}$。",
+    "ground_truth_contexts": [
+      "81e40c81-d42b-41cf-950d-9dd3b2fcc742"
+    ],
+    "question_type": "calculation",
+    "kp_path": "微积分/第2章 极限与连续/2.6闭区间上连续函数的性质",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "已知 $\\frac{\\sin x}{x}$ 是 $f(x)$ 的一个原函数，求 $\\int x^3 f'(x) dx$。",
+    "answer": "由条件有 $f(x) = \\left( \\frac{\\sin x}{x} \\right)' = \\frac{x \\cos x - \\sin x}{x^2}$。利用分部积分法：$$\\int x^3 f'(x) dx = \\int x^3 d[f(x)] = x^3 f(x) - 3 \\int x^2 f(x) dx$$ $$= x^3 f(x) - 3 \\int x^2 d\\left( \\frac{\\sin x}{x} \\right) = x^3 f(x) - 3x \\sin x + 6 \\int \\sin x dx$$ $$= x(x \\cos x - \\sin x) - 3x \\sin x - 6 \\cos x + C$$ $$= x^2 \\cos x - 4x \\sin x - 6 \\cos x + C$$",
+    "ground_truth_contexts": [
+      "2eb6a08e-641c-4b2d-a8e8-bc5ffee6cc3b"
+    ],
+    "question_type": "calculation",
+    "kp_path": "微积分/第5章 积 分/5.4 不定积分/5.4.5 分部积分法",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "什么是函数？",
+    "answer": "函数是数学最基本的概念，也是微积分研究的主要对象。函数概念反映了变量之间的依赖关系。本书中的函数都是在实数范畴内变化。",
+    "ground_truth_contexts": [
+      "b84a72d3-ecba-48c6-8867-b5fff2a68b88"
+    ],
+    "question_type": "concept",
+    "kp_path": "微积分/第1章 函 数",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "说明函数的单调性定义。",
+    "answer": "设函数f定义在区间I上，若对于任意x1,x2∈I，当x1<x2时，都有f(x1)≤f(x2)（或f(x1)<f(x2)），则称f在I上单调增加（或严格单调增加）；若都有f(x1)≥f(x2)（或f(x1)>f(x2)），则称f在I上单调减少（或严格单调减少）。在以上各种情况，都称f为I上的单调函数。",
+    "ground_truth_contexts": [
+      "74e1c01f-8099-400f-80ff-358451b816f5"
+    ],
+    "question_type": "concept",
+    "kp_path": "微积分/第1章 函 数/1,2.2函数的运算/1.2.3 函数的简单性质/1. 奇偶性/2. 单调性",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "什么是双曲函数？",
+    "answer": "双曲函数是用指数函数e^{x}和e^{x}组合定义的一类函数，形式上与三角函数类似，但几何意义对应的是双曲线而非圆",
+    "ground_truth_contexts": [
+      "e1ecb170-0e10-40e9-b1ec-53f92740f9f3"
+    ],
+    "question_type": "concept",
+    "kp_path": "微积分/第1章 函 数/1,2.2函数的运算/1.2.5 双曲函数",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "说明函数图形变换中水平方向压缩的含义。",
+    "answer": "由y=f(x)的图形在水平方向压缩c倍而得到的是y=f(cx)的图形。例如，函数y=sin2x的图形是由y=sinx（周期为2π）的图形在水平方向压缩2倍而得到，所以y=sin2x的周期为π。",
+    "ground_truth_contexts": [
+      "f747bd65-27bc-4d0e-8252-2f0c7287b2ec"
+    ],
+    "question_type": "concept",
+    "kp_path": "微积分/第1章 函 数/1,2.2函数的运算/1.2.7 函数图形的变换",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "什么是数集的有界性？",
+    "answer": "对非空数集E⊂R，若存在M∈R使得∀x∈E有x≤M，则称E有上界，M是E的一个上界；若存在m∈R使得∀x∈E有x≥m，则称E有下界，m是E的一个下界；若E既有上界又有下界，则称E为有界的。有界的等价表述为存在M̃∈R使得∀x∈E有|x|≤M̃。",
+    "ground_truth_contexts": [
+      "4b289ea6-c51f-4c98-8cb5-c70e896b6f83"
+    ],
+    "question_type": "concept",
+    "kp_path": "微积分/第1章 函 数/1.1 实数集/1.1.6 数集的界",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "说明函数奇偶性的定义。",
+    "answer": "若函数的定义域关于原点对称，且满足 f(−x)=f(x)则为偶函数（图像关于 y轴对称），满足 f(−x)=−f(x)则为奇函数（图像关于原点对称）",
+    "ground_truth_contexts": [
+      "fe3cd09f-473a-4c6f-92d2-1c86e3ada4e7"
+    ],
+    "question_type": "concept",
+    "kp_path": "微积分/第1章 函 数/1,2.2函数的运算/1.2.3 函数的简单性质/1. 奇偶性",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "什么是严格单调增加函数？",
+    "answer": "设函数f定义在区间I上，若对于任意x1,x2∈I，当x1<x2时，都有f(x1)<f(x2)，则称f在I上严格单调增加。例如，y=x^3是R上的严格单调增加函数。",
+    "ground_truth_contexts": [
+      "74e1c01f-8099-400f-80ff-358451b816f5"
+    ],
+    "question_type": "concept",
+    "kp_path": "微积分/第1章 函 数/1,2.2函数的运算/1.2.3 函数的简单性质/1. 奇偶性/2. 单调性",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "说明函数图形变换中水平方向扩展的含义。",
+    "answer": "由y=f(x)的图形在水平方向扩展c倍而得到的是y=f(x/c)的图形。例如，函数y=sin(x/2)的图形是由y=sinx（周期为2π）的图形在水平方向扩展2倍而得到，所以y=sin(x/2)的周期为4π。",
+    "ground_truth_contexts": [
+      "f747bd65-27bc-4d0e-8252-2f0c7287b2ec"
+    ],
+    "question_type": "concept",
+    "kp_path": "微积分/第1章 函 数/1,2.2函数的运算/1.2.7 函数图形的变换",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "什么是数集的上界？",
+    "answer": "对非空数集E⊂R，若存在M∈R使得∀x∈E有x≤M，则称E有上界，称M是E的一个上界。例如，自然数集N没有上界。",
+    "ground_truth_contexts": [
+      "4b289ea6-c51f-4c98-8cb5-c70e896b6f83"
+    ],
+    "question_type": "concept",
+    "kp_path": "微积分/第1章 函 数/1.1 实数集/1.1.6 数集的界",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "什么是数列极限的定义？",
+    "answer": "数列极限的定义是：设{x_n}是一个数列，A是一个常数。如果对于任意给定的正数ε，总存在正整数N，使得当n>N时，有|x_n - A| < ε，则称数列{x_n}以A为极限，记作lim_{n→∞} x_n = A。",
+    "ground_truth_contexts": [
+      "7a5c77ff-8414-4e8e-9803-e04ab9547b1d"
+    ],
+    "question_type": "concept",
+    "kp_path": "微积分/第2章 极限与连续/2.1 数列的极限/2.1.2 数列极限的定义",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "用定积分的概念，求一质点在变速直线运动中，从时刻$T_1$到$T_2$所经过的路程$s$，已知速度函数$v=v(t)$连续。",
+    "answer": "将时间区间$[T_1,T_2]$分割成$n$个小段，在每个小段$[t_{i-1},t_i]$上，由于速度连续变化很小，可用该段内任意时刻的速度近似代替，得到路程近似值$\\Delta s_i \\approx v(\\xi_i)\\Delta t_i$。然后将所有小段的路程近似值求和，得到总路程的近似值$s \\approx \\sum_{i=1}^n v(\\xi_i)\\Delta t_i$。最后令分割无限细（即$n\to\\infty$，$\\Delta t_i\to 0$），取极限得到精确路程$s = \\lim_{\\max\\Delta t_i\to0}\\sum_{i=1}^n v(\\xi_i)\\Delta t_i = \\int_{T_1}^{T_2} v(t)dt$。",
+    "ground_truth_contexts": [
+      "a26cef43-bff6-4488-8e34-0faf85b1fd53"
+    ],
+    "question_type": "application",
+    "kp_path": "微积分/第5章 积 分/5.1 定积分的概念/5.1.2 定积分的定义",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "用积分中值定理，求函数$f(x)=x^2$在区间$[0,2]$上的平均值。",
+    "answer": "根据积分中值定理，函数$f(x)$在$[a,b]$上的平均值定义为$\frac{1}{b-a}\\int_a^b f(x)dx$。对于$f(x)=x^2$，$a=0$，$b=2$，先计算定积分$\\int_0^2 x^2 dx = \\left[\frac{x^3}{3}\right]_0^2 = \frac{8}{3}$。则平均值为$\frac{1}{2-0} \\cdot \frac{8}{3} = \frac{4}{3}$。",
+    "ground_truth_contexts": [
+      "7ccc73a8-43c1-464e-9679-164b4f497be9"
+    ],
+    "question_type": "application",
+    "kp_path": "微积分/第5章 积 分/5.2 定积分的性质/5.2.2 积分中值定理",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "用分部积分法，求不定积分$\\int x e^x dx$。",
+    "answer": "设$u=x$，$dv=e^x dx$，则$du=dx$，$v=e^x$。由分部积分公式$\\int u dv = uv - \\int v du$，得$\\int x e^x dx = x e^x - \\int e^x dx = x e^x - e^x + C = e^x(x-1)+C$。",
+    "ground_truth_contexts": [
+      "bda8e547-c967-43aa-90f9-b3ef95d7eb31"
+    ],
+    "question_type": "application",
+    "kp_path": "微积分/第5章 积 分/5.4 不定积分/5.4.5 分部积分法",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "用定积分的换元法，计算$\\int_0^{\frac{a}{2}} \\sqrt{a^2 - x^2} dx$。",
+    "answer": "令$x = a \\sin t$，则$dx = a \\cos t dt$。当$x=0$时，$t=0$；当$x=\frac{a}{2}$时，$t=\frac{\\pi}{6}$。原积分化为$\\int_0^{\frac{\\pi}{6}} \\sqrt{a^2 - a^2\\sin^2 t} \\cdot a \\cos t dt = a^2 \\int_0^{\frac{\\pi}{6}} \\cos^2 t dt = \frac{a^2}{2} \\int_0^{\frac{\\pi}{6}} (1+\\cos 2t) dt$。计算得$\frac{a^2}{2} \\left[t + \frac{\\sin 2t}{2}\right]_0^{\frac{\\pi}{6}} = \frac{a^2}{2} \\left(\frac{\\pi}{6} + \frac{\\sqrt{3}}{4}\right) = \frac{a^2\\pi}{12} + \frac{a^2\\sqrt{3}}{8}$。",
+    "ground_truth_contexts": [
+      "9daab60f-b422-4f6b-9949-822f00b836c6"
+    ],
+    "question_type": "application",
+    "kp_path": "微积分/第5章 积 分/5.5 定积分的计算/5.5.1 定积分的换元法",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "叙述导数的四则运算法则（定理3.3）。",
+    "answer": "定理3.3：设函数 u, v ∈ D(I), x ∈ I，则它们和、差、积、商（分母为零的点除外）都在 I 可导，且 (1) (u(x) ± v(x))' = u'(x) ± v'(x)；(2) (u(x)v(x))' = u'(x)v(x) + u(x)v'(x)；(3) (u(x)/v(x))' = (u'(x)v(x) - u(x)v'(x)) / (v(x))^2。",
+    "ground_truth_contexts": [
+      "286cb93c-460a-400e-8ec5-8907010183b5"
+    ],
+    "question_type": "theorem",
+    "kp_path": "微积分/第3章 导数与微分/3.3 导数与微分的运算法则/3.3.1 导数的四则运算法则",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "叙述函数在一点处左导数的定义。",
+    "answer": "函数 f(x) 在 x₀ 处的左导数定义为：f'_-(x₀) = lim_{Δx→0⁻} [f(x₀+Δx) - f(x₀)]/Δx = lim_{x→x₀⁻} [f(x) - f(x₀)]/(x - x₀)。",
+    "ground_truth_contexts": [
+      "62d8340f-d963-4591-8330-1a07faf3a28f"
+    ],
+    "question_type": "theorem",
+    "kp_path": "微积分/第3章 导数与微分/3.1 导数的概念/3.1.2 导数的定义",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "叙述函数在一点处右导数的定义。",
+    "answer": "函数 f(x) 在 x₀ 处的右导数定义为：f'_+(x₀) = lim_{Δx→0⁺} [f(x₀+Δx) - f(x₀)]/Δx = lim_{x→x₀⁺} [f(x) - f(x₀)]/(x - x₀)。",
+    "ground_truth_contexts": [
+      "62d8340f-d963-4591-8330-1a07faf3a28f"
+    ],
+    "question_type": "theorem",
+    "kp_path": "微积分/第3章 导数与微分/3.1 导数的概念/3.1.2 导数的定义",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "叙述微分的概念",
+    "answer": "函数 f(x) 在 x₀ 处的微分定义为 dy|_{x=x₀} = df|_{x=x₀} = AΔx。其中，微分首先是 Δx 的线性函数，其次它与 Δy 之差是 Δx 的高阶无穷小。",
+    "ground_truth_contexts": [
+      "1ba8957e-c931-4d1f-8b6d-034677c4e833"
+    ],
+    "question_type": "theorem",
+    "kp_path": "微积分/第3章 导数与微分/3.2 微分/3.2.1 微分的概念",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "证明：若 A ≠ 0，则 dy 与 Δy 是等价无穷小。",
+    "answer": "因为 lim_{Δx→0} Δy/dy = lim_{Δx→0} [1 + o(Δx)/(AΔx)] = 1，所以 dy 与 Δy 是等价无穷小。",
+    "ground_truth_contexts": [
+      "1ba8957e-c931-4d1f-8b6d-034677c4e833"
+    ],
+    "question_type": "theorem",
+    "kp_path": "微积分/第3章 导数与微分/3.2 微分/3.2.1 微分的概念",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "叙述二阶导数的定义。",
+    "answer": "若 f(x) 在区间 I 的每点二阶可导，则称 f(x) 在区间 I 二阶可导，而称 f''(x)（或 d²f/dx²）为 f(x) 的二阶导函数，简称二阶导数。",
+    "ground_truth_contexts": [
+      "7869664c-c9f6-4962-97c5-1d371d0fb15f"
+    ],
+    "question_type": "theorem",
+    "kp_path": "微积分/第3章 导数与微分/3.6 高阶导数/3.6.1 高阶导数的概念",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "叙述幂指函数的对数求导法的一般步骤。",
+    "answer": "对于形如 y = u(x)^{v(x)} (u(x)>0) 的幂指函数，可在等式两边取对数得 ln y = v(x)·ln u(x)，然后两边对 x 求导，注意到 ln y 是复合函数，从而得到 y'/y = v'(x)·ln u(x) + v(x)·u'(x)/u(x)，最后解得 y' = y [v'(x)·ln u(x) + v(x)·u'(x)/u(x)]。",
+    "ground_truth_contexts": [
+      "439199b1-be6c-41d1-96fd-da98705776f0"
+    ],
+    "question_type": "theorem",
+    "kp_path": "微积分/第3章 导数与微分/3.3 导数与微分的运算法则/3.3.2 复合函数的导数",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "推导隐函数求二阶导数的一般方法。",
+    "answer": "设方程 e^y + xy = e 确定了隐函数 y = y(x)，首先在方程两端关于 x 求导，得 e^y y' + y + xy' = 0，可解出一阶导数。然后对一阶导数的表达式再次求导，代入相关值即可得到二阶导数在特定点的值。",
+    "ground_truth_contexts": [
+      "f8eaf037-6d2b-4223-81e4-7612bd46e3b1"
+    ],
+    "question_type": "theorem",
+    "kp_path": "微积分/第3章 导数与微分/3.6 高阶导数/3.6.3隐函数的高阶导数和参数方程表示的函数的高阶导数",
+    "unanswerable": false,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  }
+]

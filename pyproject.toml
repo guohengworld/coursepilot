@@ -73,6 +73,14 @@ dependencies = [
     "mcp>=2.0.0",
 ]
 
+[project.scripts]
+# 安装后可用 `coursepilot-mcp` 命令启动 stdio 桥接器
+coursepilot-mcp = "coursepilot.mcp.cli.main:main"
+
+[tool.setuptools.packages.find]
+# src 布局包发现，使 [project.scripts] 入口能正确定位 coursepilot 包
+where = ["src"]
+
 [dependency-groups]
 dev = [
     "pytest>=8,<9",

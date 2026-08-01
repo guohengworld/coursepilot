@@ -1,8 +1,12 @@
+> 状态：设计已锁定，核心检索管线已实现。
+> 代码对应：`src/coursepilot/rag/`（encoder、retriever、reranker、generator、vector_store）。
+> 最后更新：2026-08-01
+
 # CoursePilot RAG 引擎设计 v1.0
 
 > 最终方案 — 达成后不计划大改。
 > 讨论日期：2026-06-19 ~ 2026-06-20
-> 状态：设计已锁定，待实施
+> 实施状态：核心检索管线已实现，详见上方状态栏。
 
 ---
 

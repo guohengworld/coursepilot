@@ -1,3 +1,6 @@
+> ⚠️ 已归档：本文档为基线评估（2026-06-27）的一次性 Bad Case 诊断报告。
+> 文中涉及的 Bad Case 多数已在后续迭代中修复，详细对比见 `docs/eval_comparison.md` 和 `eval/RAG评估最终报告.md`。
+
 # Bad Case 归因诊断书
 
 > 基线：`baseline_20260627_075005` | 11 题 | 总耗时 1128.95s | 平均 Recall=0.909

@@ -1,0 +1,38 @@
+[
+  {
+    "question": "在微分方程中，什么是“解”的严格数学定义？",
+    "answer": "根据当前教材内容无法回答",
+    "ground_truth_contexts": [
+      "ceb56996-83ab-4b90-a3e2-b4ffa7c7690c"
+    ],
+    "question_type": "unanswerable",
+    "kp_path": "微积分/第6章微分方程",
+    "unanswerable": true,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "改进欧拉法与经典欧拉法相比，在精度上有何具体提升？",
+    "answer": "根据当前教材内容无法回答",
+    "ground_truth_contexts": [
+      "e4387ede-ea72-4147-a40d-34e3c2214b15"
+    ],
+    "question_type": "unanswerable",
+    "kp_path": "微积分/第6章微分方程/3. 改进 Euler 法",
+    "unanswerable": true,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  },
+  {
+    "question": "在传染病模型S-I-R中，R（移除者）的微分方程是什么？",
+    "answer": "根据当前教材内容无法回答",
+    "ground_truth_contexts": [
+      "e2c314af-fc5d-4ca8-8a81-2b40b5a8da88"
+    ],
+    "question_type": "unanswerable",
+    "kp_path": "微积分/第6章微分方程/6. 传染病模型(S-I-R模型)",
+    "unanswerable": true,
+    "course_id": "e7a20f2f-c98e-4ff3-9938-04351616e66d",
+    "document_id": "92d20a3b-1bc4-4b2d-b582-e257606b52c9"
+  }
+]

@@ -1,31 +1,37 @@
 # Ingestion 流水线：从 PDF 到知识单元
 
-> 最后更新：2026-06-17 | 覆盖范围：Week 1 ~ Week 2 | 后续扩展：Week 3 向量编码 + Week 4 评估
+> 最后更新：2026-08-01 | 覆盖范围：B0~B6 完整管线（含向量编码 + 摘要生成）
 
 ---
 
 ## 概览
 
-整个流水线分两个阶段，在**不同时间**执行：
+流水线含两个阶段，可在**相同或不同时间**执行：
 
 ```
-阶段 A（一次性，seed 脚本触发）          阶段 B（每次上传，pipeline.py 触发）
-═══════════════════════════════         ═══════════════════════════════
-手动编写的大纲 Markdown                  用户上传的教材 PDF/DOCX
+阶段 A（一次性，seed 脚本或自动触发）    阶段 B（每次上传，pipeline.py 触发）
+═══════════════════════════════════       ═══════════════════════════════
+教材 PDF/DOCX/MD 标题提取                  用户上传的教材 PDF/DOCX
        │                                        │
   syllabus_parser.py                      pdf_parser.py / docx_parser.py
-       │                                        │
-       ▼                                        ▼
-  SyllabusNode 树                         content_list（原始结构化数据）
-       │                                        │
-  kp_tree.py                              parser_utils.extract_knowledge_units()
-       │                                        │
-       ▼                                        ▼
-  knowledge_points 表 ──────────────────→ KPSplitter.assign()
-  （知识点树，有 UUID）                         │
-                                               ▼
+  (或 _ensure_kp_tree)                          │
+       │                                        ▼
+       ▼                                 content_list
+  SyllabusNode 树                              │
+       │                              parser_utils.extract_knowledge_units()
+  kp_tree.py                                   │
+       │                                        ▼
+       ▼                                 KPSplitter.assign()
+  knowledge_points 表 ──────────────────→       │
+  （知识点树，有 UUID）                          ▼
+                                        SummaryBridge 摘要生成
+                                              │
+                                              ▼
+                                         BGE-M3 编码 → Milvus
+                                              │
+                                              ▼
                                       knowledge_units 表
-                                      （文本块 + kp_id + page_ref）
+                                      （文本块 + kp_id + page_ref + 摘要）
 ```
 
 **阶段 A 只在创建课程时执行一次**（通过 `scripts/seed_knowledge.py`）。阶段 B 在每次用户上传教材时执行（通过 `POST /courses/upload` → `pipeline.run_ingestion()`）。阶段 B 从 `knowledge_points` 表读取已建好的知识点树作为索引。
@@ -195,30 +201,44 @@ Document.status 状态机：
 和上面 B1~B6 一一对应：
 
 ```python
-async def run_ingestion(session: AsyncSession, document_id: str) -> None:
-    # B1. 取 Document 记录
+async def run_ingestion(
+    session: AsyncSession,
+    document_id: str,
+    start_page: int = 0,
+    end_page: int | None = None,
+    *,
+    preparsed_content_list: list[dict] | None = None,
+) -> None:
+    """执行单个 Document 的 ingestion 管线。
+    若传入 preparsed_content_list 则跳过文件解析，直接复用已有结果。
+    """
     doc = await session.get(Document, UUID(document_id))
     doc.status = "processing"
     await session.flush()
 
     try:
-        # B2. 解析文件 → content_list
-        if doc.file_type == "pdf":
-            result = await parse_pdf(doc.file_path)
-        elif doc.file_type == "docx":
-            result = parse_docx(doc.file_path)
-        elif doc.file_type == "md":
-            result = _parse_markdown(doc.file_path)
-        content_list = result["content_list"]
+        # ── B0: 解析文件 → content_list ──────────────────
+        if preparsed_content_list is not None:
+            content_list = preparsed_content_list
+        else:
+            if doc.file_type == "pdf":
+                result = await parse_pdf(doc.file_path, start_page, end_page)
+            elif doc.file_type == "docx":
+                result = parse_docx(doc.file_path)
+            elif doc.file_type == "md":
+                result = _parse_markdown(doc.file_path)
+            content_list = result["content_list"]
 
-        # B3. 切分 → 文本块列表
+        # ── B1: 构建知识点树（若课程尚无 KP 树）───────────
+        await _ensure_kp_tree(session, doc.course_id, content_list)
+
+        # ── B2: 切分文本块 ────────────────────────────────
         units = extract_knowledge_units(
             content_list,
             document_id=str(doc.id),
-            kp_id="",  # 暂空，下一步 B5 分配
         )
 
-        # B4. 查知识点列表（阶段 A 的产物）
+        # ── B3: 查知识点列表 + KPSplitter 分配 ────────────
         kp_result = await session.execute(
             select(KnowledgePoint).where(
                 KnowledgePoint.course_id == doc.course_id
@@ -229,13 +249,17 @@ async def run_ingestion(session: AsyncSession, document_id: str) -> None:
              "kp_path": kp.kp_path, "level": _kp_level(kp.kp_path)}
             for kp in kp_result.scalars()
         ]
-
-        # B5. 分配 kp_id
         if kp_nodes:
             splitter = KPSplitter(kp_nodes, str(doc.course_id))
             units = splitter.assign(units)
 
-        # B6. 入库 knowledge_units + 更新状态
+        # ── B4: 摘要生成（DeepSeek 并发） ─────────────────
+        units = await SummaryBridge.run(units, session, doc.course_id)
+
+        # ── B5: 向量编码（BGE-M3 → Milvus） ──────────────
+        await _encode_units(session, units, doc.course_id)
+
+        # ── B6: 入库 knowledge_units + 更新状态 ──────────
         for u in units:
             session.add(KnowledgeUnit(
                 kp_id=UUID(u["kp_id"]) if u.get("kp_id") else None,
@@ -326,11 +350,6 @@ graph TD
 | `page_ref` | `knowledge_units` | `p10` | 阶段 B3，`parser_utils._format_page_ref()` |
 | `kp_id` | `knowledge_units` | `uuid-1003` | 阶段 B5，`KPSplitter` 匹配后分配 |
 
-## 后续扩展（Week 3 ~ Week 4）
+## 已实现扩展
 
-| 周次 | 扩展内容 | 插入位置 |
-|------|----------|----------|
-| Week 3 | bge-m3 稠密编码 → Milvus | 阶段 B6 INSERT 后追加 |
-| Week 3 | BM25 稀疏索引 | 阶段 B6 INSERT 后追加 |
-| Week 4 | RAGAS 评估 | 新增 `evaluation/rag_eval.py` |
-| Week 4 | LLM 语义匹配升级 | 替换 B5 的 `_match_content()` |
+上述扩展（BGE-M3 向量编码、Milvus 混合检索、RAGAS 评估）均已实现并集成到 B4~B6 管线中。详见 `src/coursepilot/rag/` 和 `eval/eval_ragas.py`。

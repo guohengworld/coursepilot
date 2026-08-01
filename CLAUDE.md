@@ -114,12 +114,16 @@ CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技�
 
 - `docs/pipeline/` — 导入管道设计文档
 - `docs/rag/` — RAG 引擎设计文档
+- `docs/archive/` — 历史评估报告、设计初稿等归档文档
 
-## 数据库模型（11 张表）
+## 数据库模型（14 张表）
 
 - `User` → `Course` → `KnowledgePoint`（邻接表模型，`parent_id` 自引用，深度 ≤ 4）→ `KnowledgeUnit`（带 `kp_id` 的文本块）。
 - `User` → `Document`（上传的文件，状态流转：pending → processing → ready/failed）。
 - `User` → `Question`、`PracticeRecord`、`DiagnosisReport`、`ReviewPlan`、`QARecord`、`EvalMetric`。
+- `UserProfile` — 用户画像（薄弱知识点、学习进度等）。
+- `AgentSession` — Agent 会话管理（LangGraph 的 thread_id + checkpoint）。
+- `AuditLog` — 操作审计日志。
 
 ## API 路由
 
@@ -137,19 +141,31 @@ CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技�
 
 ```text
 tests/
-├── unit/               # 单元测试（无需数据库/外部服务）
-│   ├── test_week2.py   # 解析器、大纲提取、KP 分割器、文件存储 (56 tests)
-│   ├── test_rag.py     # RAG 组件单元测试
-│   ├── test_vector_store.py  # 向量存储测试
+├── unit/                   # 单元测试（无需数据库/外部服务）
+│   ├── test_week2.py       # 解析器、大纲提取、KP 分割器、文件存储
+│   ├── test_rag.py         # RAG 组件单元测试
+│   ├── test_vector_store.py # 向量存储测试
 │   ├── test_summary_bridge.py # SummaryBridge 测试
-│   └── test_import.py  # 导入验证
-├── integration/        # 集成测试（需要 PostgreSQL + MinerU + Milvus）
-│   ├── test_real_pipeline.py    # 完整导入管道 (8 steps)
-│   ├── test_ingestion.py        # PDF/DOCX 解析器
-│   └── test_gpu_availability.py # GPU 环境检测
-└── fixtures/           # 测试数据
-    ├── pdfs/           # 8 本教材 PDF
-    ├── eval_questions.json        # (已移至 eval/questions/)
+│   ├── test_import.py      # 导入验证
+│   ├── test_bm25.py        # BM25 检索测试
+│   ├── test_agent_phase1.py # Agent 阶段 1 测试
+│   ├── test_agent_phase2.py # Agent 阶段 2 测试
+│   ├── test_context_memory.py # 上下文记忆测试
+│   ├── test_practice_api.py # 练习 API 测试
+│   ├── test_mcp.py         # MCP 工具测试
+│   └── test_phase3.py      # 阶段 3 综合测试
+├── integration/            # 集成测试（需要 PostgreSQL + MinerU + Milvus）
+│   ├── test_real_pipeline.py # 完整导入管道
+│   ├── test_ingestion.py    # PDF/DOCX 解析器
+│   ├── test_gpu_availability.py # GPU 环境检测
+│   ├── test_agent_workflow.py # Agent 端到端工作流
+│   └── test_agent_db.py    # Agent 数据库集成
+├── rag/                    # RAG 专项测试
+│   └── test_ragas.py       # RAGAS 评估
+├── milvus/                 # Milvus 专项测试
+│   └── test_milvus_data.py # Milvus 数据验证
+└── fixtures/               # 测试数据
+    ├── pdfs/               # 8 本教材 PDF
     └── exported_units.json
 ```
 
