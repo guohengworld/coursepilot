@@ -6,6 +6,7 @@
 """
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 项目根目录（config.py 位于 src/coursepilot/，上溯三级）
@@ -82,7 +83,14 @@ class Settings(BaseSettings):
     # ── MCP ────────────────────────────────────────────
     mcp_transport: str = "stdio"  # stdio / http
     mcp_gateway: str = "https://mcp.coursepilot.example.com/mcp"
-    mcp_api_key: str = ""  # MVP 阶段轻量认证
+    mcp_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            # 与 cli 端环境变量命名一致（优先）；兼容旧名 MCP_API_KEY
+            "COURSEPILOT_MCP_API_KEY",
+            "MCP_API_KEY",
+        ),
+    )  # MVP 阶段轻量认证
     mcp_host: str = "0.0.0.0"
     mcp_port: int = 8080
     mcp_protocol_version: str = "2025-06-18"
