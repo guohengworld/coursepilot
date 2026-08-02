@@ -31,7 +31,7 @@ async def query_rag(
     Returns:
         (answer, raw_context, metadata, sources, token_info)
     """
-    # 1. 五阶段检索
+    # 1. 六阶段检索
     retriever = Retriever()
     context, metadata = await retriever.retrieve(session, query, course_id)
 

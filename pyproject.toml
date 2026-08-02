@@ -1,7 +1,8 @@
 [project]
 name = "coursepilot"
 version = "0.1.0"
-description = "AI Teaching Assistant Agent for CS courses"
+description = "AI Teaching Assistant Agent for university courses"
+license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
     # Web 服务

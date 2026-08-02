@@ -16,7 +16,7 @@
 2. [数据层：文档解析与分块](#2-数据层文档解析与分块)
 3. [嵌入层：BGE-M3 统一编码](#3-嵌入层bge-m3-统一编码)
 4. [向量存储层：Milvus Lite](#4-向量存储层milvus-lite)
-5. [检索层：五阶段管线](#5-检索层五阶段管线)
+5. [检索层：六阶段管线](#5-检索层六阶段管线)
 6. [生成层：Prompt 工程与引用锚定](#6-生成层prompt-工程与引用锚定)
 7. [评估层：RAGAS](#7-评估层ragas)
 8. [运维层：日志、监控、降级](#8-运维层日志监控降级)
@@ -427,7 +427,7 @@ def hybrid_search(self, dense_vec, sparse_vec, course_id, top_k=20):
 
 ---
 
-## 5. 检索层：五阶段管线
+## 5. 检索层：六阶段管线
 
 ### 5.0 查询改写（Query Rewriting）
 
@@ -587,7 +587,7 @@ async def kp_expand(
 
 ```python
 class Retriever:
-    """五阶段检索编排器"""
+    """六阶段检索编排器"""
 
     def __init__(
         self,
@@ -1006,7 +1006,7 @@ src/coursepilot/rag/
 ├── vector_store.py       # Milvus Lite CRUD + hybrid_search
 ├── query_rewriter.py     # DeepSeek 查询改写（阶段0）
 ├── reranker.py           # bge-reranker-v2-m3 重排序（阶段3）
-├── retriever.py          # 五阶段检索编排 + KP 扩展（阶段1-4）
+├── retriever.py          # 六阶段检索编排 + KP 扩展（阶段1-4）
 ├── generator.py          # DeepSeek LLM 调用 + prompt 组装（阶段5）
 ├── citation.py           # <ref> 标签解析与验证
 ├── logger.py             # 结构化查询日志
@@ -1048,7 +1048,7 @@ database/
 | B2 | 实现 `vector_store.py`：CRUD + hybrid_search | `rag/vector_store.py` | ✅ 已完成 |
 | B3 | 实现 `query_rewriter.py` | `rag/query_rewriter.py` | ✅ 已完成 |
 | B4 | 实现 `reranker.py` | `rag/reranker.py` | ✅ 已完成 |
-| B5 | 实现 `retriever.py`：五阶段编排 + KP 扩展 | `rag/retriever.py` | ✅ 已完成 |
+| B5 | 实现 `retriever.py`：六阶段编排 + KP 扩展 | `rag/retriever.py` | ✅ 已完成 |
 | B6 | 实现 `generator.py` + `citation.py` | `rag/generator.py`, `rag/citation.py` | ✅ 已完成 |
 | B7 | 实现 `rag/config.py` 降级开关 | `rag/config.py` | ✅ 已完成 |
 | B8 | 实现 `rag/logger.py` 结构化日志 | `rag/logger.py` | ✅ 已完成 |

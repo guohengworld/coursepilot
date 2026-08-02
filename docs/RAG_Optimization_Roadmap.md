@@ -5,7 +5,7 @@
 # CoursePilot RAG 含金量提升方案
 
 > 文档生成时间：2026-07-14
-> 基于代码版本：五阶段检索（改写 → BGE-M3 编码 → Milvus 混合检索 → bge-reranker 重排 → KP 文档金字塔扩展）+ DeepSeek 生成
+> 基于代码版本：六阶段检索（改写 → BGE-M3 编码 → Milvus 混合检索 → bge-reranker 重排 → KP 文档金字塔扩展）+ DeepSeek 生成
 
 ---
 
@@ -100,7 +100,7 @@ CoursePilot 的 RAG 已经具备一个**相对完整、可扩展的检索管线*
 - **图片/表格**：MinerU 已经提取到 `parsed/*.jpg` 和 md 表格，应该把它们 caption 化后作为独立 unit 入向量库。
 - **chunk overlap 策略**：当前 `chunk_overlap=50` 是全局配置，建议按内容类型动态调整：定理/公式 0 overlap，例题保持完整，叙述文本可 overlap。
 
-### 4.2 检索层：从“五阶段”到“自适应多路”
+### 4.2 检索层：从“六阶段”到“自适应多路”
 
 建议把 `Retriever.retrieve` 升级为**策略化检索**：
 

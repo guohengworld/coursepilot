@@ -8,23 +8,23 @@
 > **设计日期**：2026年6月28日  
 > **适用项目**：CoursePilot AI 教学助手  
 > **技术栈**：FastAPI + SQLAlchemy(async) + PostgreSQL + Milvus + DeepSeek + BGE-M3 + **LangGraph**  
-> **设计原则**：Workflow 为骨架（确定性流程编排），Harness 思想为肌肉（验证、护栏、追踪、记忆）
+> **设计原则**：纯 Workflow 驱动（确定性流程编排），关键节点内嵌验证、护栏、追踪与记忆
 
 ---
 
-## 设计理念：Workflow + Harness
+## 设计理念：纯 Workflow 驱动
 
-**Workflow 是骨架，Harness 是肌肉，两者不矛盾。**
+**用确定性有向状态图编排教学流程，关键节点内嵌工程化机制。**
 
-- **Workflow**（LangGraph 有向状态图）：教学场景意图有限可枚举（5 种），执行路径确定，用声明式状态图而非通用 Planner 动态规划
-- **Harness 思想**：体现在 workflow 的节点设计中——关键步骤内嵌独立验证（不护短）、确定性护栏、每步追踪、人类接管点
+- **Workflow**（LangGraph 有向状态图）：教学场景意图有限可枚举（4 种），执行路径确定，用声明式状态图而非通用 Planner 动态规划
+- **工程化机制**：体现在 workflow 的节点设计中——关键步骤内嵌独立验证（不护短）、确定性护栏、每步追踪、人类接管点
 
 ```
 LangGraph StateGraph（确定性流程编排）
     │
     ├── 节点: 查掌握度  ──┐
     ├── 节点: RAG检索   ──┤
-    ├── 节点: 生成练习   ──┼── Harness 思想体现在这里：
+    ├── 节点: 生成练习   ──┼── 工程化机制体现在这里：
     ├── 节点: 验证答案   ──┤    ├── 生成-验证分离（条件边 + 重试循环）
     ├── 节点: 生成计划   ──┤    ├── 确定性护栏（不靠LLM判断）
     └── 节点: 更新画像   ──┘    ├── 每步自动追踪（LangGraph native tracing）
@@ -50,7 +50,7 @@ LangGraph StateGraph（确定性流程编排）
 
 ### 1.1 业务定位
 
-CoursePilot Agent 是一个**能自主执行教学任务的 AI 教学系统**。它不是在 RAG 上加个聊天框，而是用 LangGraph 有向状态图编排完整的教学工作流——模型是 CPU，Harness 是操作系统。
+CoursePilot Agent 是一个**能自主执行教学任务的 AI 教学系统**。它不是在 RAG 上加个聊天框，而是用 LangGraph 有向状态图编排完整的教学工作流——以确定性流程编排教学任务。
 
 **当前状态**：RAG 问答系统（学生提问 → 检索 → 生成回答）
 
@@ -62,7 +62,6 @@ CoursePilot Agent 是一个**能自主执行教学任务的 AI 教学系统**。
 | "出一套树结构练习" | 不支持 | 基于知识点树出题 → 独立验证答案 key → 学生作答 → 批改 → 归因错误知识点 |
 | "我上次错的那题再讲讲" | 不记得 | 从长期记忆中检索历史 → 定位错误 → 关联知识点 → 重新讲解 |
 | "这学期哪些没掌握" | 不支持 | 聚合全学期练习记录 → 按知识点树统计正确率 → 生成诊断报告 |
-| "这段代码为什么报错" | 不支持 | 代码沙箱运行 → 错误分析 → 关联课程知识点 → 给出解释 |
 | "制定下周复习计划" | 不支持 | 学情诊断 → 知识点优先级排序 → 生成分天计划 → 存入复习计划表 |
 
 ### 1.2 LangGraph 有向状态图架构
@@ -76,13 +75,13 @@ CoursePilot Agent 是一个**能自主执行教学任务的 AI 教学系统**。
                     └──────┬──────┘
                            │ 条件边
         ┌──────────┬───────┼───────┬──────────┐
-        ↓          ↓       ↓       ↓          ↓
-   ┌────────┐ ┌────────┐ ┌────┐ ┌──────┐ ┌────────┐
-   │question│ │practice│ │diag│ │review│ │code_help│
-   │ 子图   │ │ 子图   │ │子图│ │ 子图 │ │ 子图   │
-   └────┬───┘ └────┬───┘ └─┬──┘ └──┬───┘ └────┬───┘
-        │          │       │       │          │
-        └──────────┴───────┴───────┴──────────┘
+        ↓          ↓       ↓       ↓
+   ┌────────┐ ┌────────┐ ┌────┐ ┌──────┐
+   │question│ │practice│ │diag│ │review│
+   │ 子图   │ │ 子图   │ │子图│ │ 子图 │
+   └────┬───┘ └────┬───┘ └─┬──┘ └──┬───┘
+        │          │       │       │
+        └──────────┴───────┴───────┘
                            │
                     ┌──────┴──────┐
                     │  finalize   │ 收尾节点
@@ -105,12 +104,12 @@ get_mastery → query_rag → generate_quiz → evaluate_quiz
 ```
 
 **为什么用 workflow 而非通用 Planner**：
-- 教学意图有限可枚举（5 种），执行路径确定，不需要 Planner 动态规划
+- 教学意图有限可枚举（4 种），执行路径确定，不需要 Planner 动态规划
 - Workflow 延迟低（3-5 秒 vs 三 Agent 串行 6-12 秒）
 - Token 成本低（1 倍 vs 3 倍 LLM 调用）
 - 结果可预测，便于调试
 
-**Harness 思想如何保留**：
+**工程化机制如何保留**：
 - **生成-验证分离**：不是独立 Agent，而是图里的验证节点 + 条件边 + 重试循环
 - **确定性护栏**：不靠 LLM 判断，用规则
 - **每步追踪**：LangGraph native tracing
@@ -124,7 +123,6 @@ get_mastery → query_rag → generate_quiz → evaluate_quiz
 | **练习生成** | classify → get_mastery → generate_quiz → evaluate_quiz → finalize | 独立验证答案key正确性 | 知识点树+知识单元 |
 | **学情诊断** | classify → aggregate_history → analyze_weakness → finalize | 验证诊断结论与数据一致性 | PracticeRecord表 |
 | **复习规划** | classify → get_mastery → query_rag → generate_quiz → evaluate_quiz → create_plan → finalize | 验证计划覆盖所有薄弱点 | ReviewPlan表 |
-| **代码辅导** | classify → extract_code → run_sandbox → analyze_error → finalize | 验证解释与课程知识点一致 | 无（新增） |
 
 ---
 
@@ -143,14 +141,14 @@ get_mastery → query_rag → generate_quiz → evaluate_quiz
 │    │  LangGraph 节点（每个节点调用一个 Skill）     │             │
 │    │  classify / get_mastery / query_rag /        │             │
 │    │  generate_quiz / evaluate_quiz / create_plan │             │
-│    │  / diagnose / code_help / finalize           │             │
+│    │  / diagnose / finalize                       │             │
 │    └─────────────────────────────────────────────┘             │
 │    ┌─────────────────────────────────────────────┐             │
 │    │  AGENTS.md / 上下文工程 / 条件边+重试循环     │             │
 │    └─────────────────────────────────────────────┘             │
 ├────────────────────────────────────────────────────────────────┤
 │ 4. 工具与环境层                                                 │
-│    RAG引擎(现有) / 代码沙箱(Docker) / MCP Server                │
+│    RAG引擎(现有) / MCP Server                                   │
 ├────────────────────────────────────────────────────────────────┤
 │ 5. 数据与记忆层                                                 │
 │    PostgreSQL(12张表) / Milvus / agent_sessions / user_profiles │
@@ -251,7 +249,7 @@ class AgentState(TypedDict):
     context: dict                # 学生画像 + 课程信息 + 历史
     
     # 意图分类
-    intent: str                  # question/practice/diagnose/review/code_help
+    intent: str                  # question/practice/diagnose/review
     
     # 各节点输出（按需填充）
     mastery: Optional[dict]      # get_mastery 输出
@@ -260,7 +258,6 @@ class AgentState(TypedDict):
     answer_key: Optional[list]
     evaluation: Optional[dict]   # evaluate_quiz 输出
     diagnosis: Optional[dict]    # diagnose 输出
-    code_result: Optional[dict]  # code_help 输出
     review_plan: Optional[dict]  # create_plan 输出
     final_output: Optional[str]  # 最终输出
     
@@ -280,7 +277,7 @@ async def build_context(state: AgentState) -> dict:
     return {"context": context, "token_count": 0}
 
 async def classify_node(state: AgentState) -> dict:
-    """意图分类节点：5 种核心意图 + 通用回退"""
+    """意图分类节点：4 种核心意图 + 通用回退"""
     intent = await classify_intent(state["user_query"], state["context"])
     return {"intent": intent}
 
@@ -328,7 +325,7 @@ async def generate_quiz_node(state: AgentState) -> dict:
     }
 
 async def evaluate_quiz_node(state: AgentState) -> dict:
-    """验证节点：独立验证答案 key 正确性（Harness：生成-验证分离）"""
+    """验证节点：独立验证答案 key 正确性（生成-验证分离）"""
     eval_result = await evaluate_quiz_skill(
         questions=state["questions"],
         answer_key=state["answer_key"],
@@ -359,13 +356,6 @@ async def diagnose_node(state: AgentState) -> dict:
     )
     return {"diagnosis": diagnosis, "final_output": format_diagnosis(diagnosis)}
 
-async def code_help_node(state: AgentState) -> dict:
-    """代码辅导节点"""
-    code = extract_code_from_query(state["user_query"])
-    run_result = await code_sandbox.execute(code)
-    analysis = await analyze_error_skill(code, run_result, state["context"])
-    return {"code_result": analysis, "final_output": format_code_help(analysis)}
-
 async def finalize_node(state: AgentState) -> dict:
     """收尾节点：更新长期记忆 + 格式化输出"""
     # 更新 QA 记录
@@ -391,7 +381,6 @@ def route_by_intent(state: AgentState) -> str:
         "practice": "get_mastery",
         "diagnose": "diagnose",
         "review": "get_mastery",
-        "code_help": "code_help",
     }
     return routes.get(intent, "query_rag")  # 通用回退
 
@@ -416,7 +405,6 @@ def build_agent_graph(checkpointer: PostgresSaver):
     graph.add_node("evaluate_quiz", evaluate_quiz_node)
     graph.add_node("create_plan", create_plan_node)
     graph.add_node("diagnose", diagnose_node)
-    graph.add_node("code_help", code_help_node)
     graph.add_node("finalize", finalize_node)
     
     # 入口
@@ -433,7 +421,6 @@ def build_agent_graph(checkpointer: PostgresSaver):
             "query_rag": "query_rag",
             "get_mastery": "get_mastery",
             "diagnose": "diagnose",
-            "code_help": "code_help",
         },
     )
     
@@ -460,9 +447,6 @@ def build_agent_graph(checkpointer: PostgresSaver):
     
     # diagnose 路径
     graph.add_edge("diagnose", "finalize")
-    
-    # code_help 路径
-    graph.add_edge("code_help", "finalize")
     
     # 终点
     graph.add_edge("finalize", END)
@@ -525,7 +509,7 @@ HUMAN_APPROVAL_REQUIRED = {
 # CoursePilot Agent 指令
 
 ## 角色定位
-你是计算机科学课程的 AI 教学助手，服务学生、教师和管理员。
+你是高校课程的 AI 教学助手，服务学生、教师和管理员。
 
 ## 核心原则
 1. 准确性优先：所有知识性回答必须标注来源（文档名+页码+知识点路径）
@@ -566,7 +550,6 @@ HUMAN_APPROVAL_REQUIRED = {
 | **grade_answers** | （practice后） | 新增 | DeepSeek | 批改结果 + 错误归因 |
 | **diagnose** | diagnose | 新增 | PracticeRecord 表聚合 | 薄弱知识点 + 报告 |
 | **create_review_plan** | create_plan | 新增 | ReviewPlan 表 + DeepSeek | 分天复习计划 |
-| **code_sandbox** | code_help | 新增 | Docker 沙箱 + DeepSeek | 代码运行结果 + 错误分析 |
 | **get_mastery** | get_mastery | 新增 | user_profiles 表 | 掌握度 + 薄弱子主题 |
 | **update_qa_record** | finalize | 新增 | QARecord 表 | 无（副作用操作） |
 | **classify_intent** | classify | 新增 | DeepSeek 轻量分类 | 意图标签 |
@@ -580,12 +563,12 @@ class QueryRagSkill:
     """封装现有 Retriever + Generator，核心逻辑零改动"""
     
     def __init__(self, retriever: Retriever, generator: Generator):
-        self.retriever = retriever     # 现有五阶段检索
+        self.retriever = retriever     # 现有六阶段检索
         self.generator = generator     # 现有 DeepSeek 生成
     
     async def execute(self, query: str, course_id: int, 
                       difficulty_filter: str = None) -> dict:
-        # 1. 检索（完全复用现有五阶段：改写→编码→检索→重排序→KP扩展）
+        # 1. 检索（完全复用现有六阶段：改写→编码→检索→重排序→KP扩展）
         results = await self.retriever.retrieve(query, course_id)
         
         # 2. 可选过滤
@@ -611,7 +594,7 @@ class QueryRagSkill:
 # src/coursepilot/agent/skills/evaluate_quiz.py
 
 class EvaluateQuizSkill:
-    """独立验证练习题答案 key — Harness 生成-验证分离"""
+    """独立验证练习题答案 key — 生成-验证分离"""
     
     EVALUATOR_SYSTEM_PROMPT = """
     你是一个严格的审查员。你的职责是找出问题，而不是表扬。
@@ -645,33 +628,6 @@ class EvaluateQuizSkill:
 ```
 
 ### 3.5 工具与环境层
-
-#### 代码沙箱（CS 课程核心工具）
-
-```python
-# src/coursepilot/tools/code_sandbox.py
-
-class CodeSandbox:
-    """Docker 沙箱：安全执行学生代码"""
-    
-    SANDBOX_CONFIG = {
-        "image": "python:3.12-slim",
-        "timeout": 5,           # 5 秒超时
-        "memory": "128m",        # 128MB 内存
-        "cpus": "0.5",           # 半核 CPU
-        "network": "none",       # 禁止网络
-        "read_only": True,       # 只读根文件系统
-        "tmpfs": {"/tmp": "size=64m"},  # 临时目录
-    }
-    
-    async def execute(self, code: str, language: str = "python") -> dict:
-        return {
-            "output": stdout,
-            "error": stderr,
-            "returncode": returncode,
-            "timeout": timed_out,
-        }
-```
 
 #### MCP Server（对外暴露能力）
 
@@ -724,7 +680,7 @@ CREATE TABLE agent_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id INTEGER NOT NULL REFERENCES users(id),
     course_id INTEGER NOT NULL REFERENCES courses(id),
-    intent VARCHAR(20) NOT NULL,        -- question/practice/diagnose/review/code_help
+    intent VARCHAR(20) NOT NULL,        -- question/practice/diagnose/review
     status VARCHAR(20) DEFAULT 'pending', -- pending/running/waiting_human/completed/failed
     token_count INTEGER DEFAULT 0,
     estimated_cost DECIMAL(10,4) DEFAULT 0,
@@ -967,7 +923,7 @@ LANGSMITH_PROJECT=coursepilot
 8. generate_quiz 节点
    → 基于 materials 生成 3 道练习题 + 答案key
 
-9. evaluate_quiz 节点（Harness：独立验证）
+9. evaluate_quiz 节点（独立验证）
    → Q1 验证：PASS
    → Q2 验证：FAIL（答案与课程定义不一致）
    → 条件边路由：retry_count=1 < 2 → 回到 generate_quiz
@@ -1023,11 +979,9 @@ LANGSMITH_PROJECT=coursepilot
 | `src/coursepilot/agent/skills/grade_answers.py` | 新增 | Skill：批改学生答案 |
 | `src/coursepilot/agent/skills/diagnose.py` | 新增 | Skill：学情诊断 |
 | `src/coursepilot/agent/skills/review_plan.py` | 新增 | Skill：复习规划 |
-| `src/coursepilot/agent/skills/code_help.py` | 新增 | Skill：代码辅导（CS专用） |
 | `src/coursepilot/agent/skills/get_mastery.py` | 新增 | Skill：查询掌握度 |
 | `src/coursepilot/agent/skills/classify_intent.py` | 新增 | Skill：意图分类 |
 | `src/coursepilot/agent/skills/update_qa_record.py` | 新增 | Skill：更新QA记录 |
-| `src/coursepilot/tools/code_sandbox.py` | 新增 | Docker 代码沙箱 |
 | `src/coursepilot/governance/rbac.py` | 新增 | RBAC 权限控制 |
 | `src/coursepilot/governance/guardrails.py` | 新增 | 确定性护栏 |
 | `src/coursepilot/governance/audit.py` | 新增 | 审计日志 |
@@ -1042,7 +996,7 @@ LANGSMITH_PROJECT=coursepilot
 | `src/coursepilot/ingestion/*` | **不改** | 解析器/管道 零改动 |
 | `src/coursepilot/knowledge/*` | **不改** | 知识点树/KPSplitter 零改动 |
 
-**总计**：新增 30 个文件，改动 1 个文件，**核心现有代码零改动**。
+**总计**：新增 28 个文件，改动 1 个文件，**核心现有代码零改动**。
 
 **新增依赖**：
 
@@ -1081,13 +1035,12 @@ langsmith (可选，可视化追踪)
 
 **里程碑**：学生说"帮我复习二叉树"，LangGraph 图执行完整 review 路径，含验证重试。
 
-### Phase 3：企业级加固（3 周）
+### Phase 3：企业级加固（2 周）
 
 | 周 | 任务 | 产出 |
 |----|------|------|
-| W6 | code_help 节点 + Docker 沙箱 | 代码辅导可用 |
-| W7 | RBAC + 护栏 + 审计日志 + interrupt 人类接管 | 安全治理就绪 |
-| W8 | LangSmith 集成 + Metrics + MCP Server | 可观测+外部可调用 |
+| W6 | RBAC + 护栏 + 审计日志 + interrupt 人类接管 | 安全治理就绪 |
+| W7 | LangSmith 集成 + Metrics + MCP Server | 可观测+外部可调用 |
 
 **里程碑**：企业级教学 Agent，多角色、可审计、可观测、可扩展。
 
@@ -1102,7 +1055,6 @@ langsmith (可选，可视化追踪)
 | DeepSeek 练习题质量不稳定 | 中 | 高 | evaluate_quiz 独立验证 + 最多 2 次重试 + RAGAS 评估 |
 | LangGraph checkpoint 与 agent_sessions 数据不一致 | 低 | 低 | agent_sessions 只存业务元数据，checkpoint 存执行细节，各管各的 |
 | user_profiles 预计算延迟导致画像过时 | 低 | 中 | 每次 Agent 会话结束后触发增量更新 + 每小时全量刷新 |
-| 代码沙箱安全风险 | 低 | 高 | Docker 隔离 + 5s 超时 + 禁网 + 128MB + 只读 |
 | Token 成本失控 | 低 | 中 | 单会话 50K 上限 + 单日 500K 上限 + 成本追踪告警 |
 | 意图分类错误 | 中 | 中 | 通用回退到 question 路径 + 澄清追问 |
 

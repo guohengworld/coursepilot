@@ -39,9 +39,6 @@ PYTHONPATH=src .venv/Scripts/python -m scripts.batch_ingest
 docker compose up -d
 docker compose down
 
-# 启动 Streamlit UI
-.venv/Scripts/python -m streamlit run src/coursepilot/ui/app.py
-
 # RAGAS 评估
 PYTHONPATH=src EMBEDDING_MODEL_PATH="F:/all-projs/models/bge-m3" .venv/Scripts/python -m eval.eval_ragas baseline
 PYTHONPATH=src EMBEDDING_MODEL_PATH="F:/all-projs/models/bge-m3" .venv/Scripts/python -m eval.eval_ragas grid --stage 1
@@ -54,7 +51,7 @@ alembic upgrade head
 
 ## 系统架构
 
-CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技术栈：FastAPI + SQLAlchemy 异步模式 + PostgreSQL。文档解析：MinerU（PDF OCR）+ python-docx + 自定义 Markdown 解析器。RAG 引擎：BGE-M3 编码 + Milvus Lite 向量存储 + bge-reranker-v2-m3 重排序 + DeepSeek LLM 生成。
+CoursePilot 是一个面向高校课程的 AI 教学助手。后端技术栈：FastAPI + SQLAlchemy 异步模式 + PostgreSQL。文档解析：MinerU（PDF OCR）+ python-docx + 自定义 Markdown 解析器。RAG 引擎：BGE-M3 编码 + Milvus Lite 向量存储 + bge-reranker-v2-m3 重排序 + DeepSeek LLM 生成。
 
 ## 两阶段导入管道（核心机制）
 
@@ -91,14 +88,13 @@ CoursePilot 是一个面向计算机科学课程的 AI 教学助手。后端技�
 | src/coursepilot/storage/file_store.py | FileStore — 本地文件系统存储，文件保存在 data/uploads/ 下，使用 UUID 命名 |
 | src/coursepilot/rag/vector_store.py | VectorStore — Milvus Lite 向量存储 CRUD + 混合检索 + RRF |
 | src/coursepilot/rag/encoder.py | Encoder — BGE-M3 编码器（dense 1024-dim + sparse） |
-| src/coursepilot/rag/retriever.py | Retriever — 五阶段检索编排（改写→编码→检索→重排序→KP 扩展） |
+| src/coursepilot/rag/retriever.py | Retriever — 六阶段检索编排（改写→编码→混合检索→重排序→KP 扩展） |
 | src/coursepilot/rag/reranker.py | Reranker — bge-reranker-v2-m3 cross-encoder 重排序 |
 | src/coursepilot/rag/generator.py | Generator — DeepSeek LLM 生成（含流式 SSE） |
 | src/coursepilot/rag/query_rewriter.py | QueryRewriter — DeepSeek 查询改写 |
 | src/coursepilot/rag/summary_bridge.py | SummaryBridge — 知识单元摘要并发生成（thinking=disabled） |
 | src/coursepilot/rag/citation.py | Citation — 引用来源格式化 |
 | src/coursepilot/evaluation/rag_eval.py | RAGEvaluator — RAGAS 四大指标评估器 |
-| src/coursepilot/ui/app.py | Streamlit UI 前端（问答、学习报告） |
 | scripts/seed_knowledge.py | CLI 工具：解析 PDF → 提取标题 → 构建 KP 树；--ingest 参数可同时执行知识单元导入 |
 | scripts/batch_ingest.py | 批量处理 tests/fixtures/pdfs/ 下的全部 8 个 PDF，按课程分组 |
 | scripts/rebuild_all.py | 清空重建所有课程的知识点和知识单元 |

@@ -1,4 +1,4 @@
-"""练习题验证 Skill（Harness 核心）
+"""练习题验证 Skill（生成-验证分离核心）
 
 用独立 prompt 审查生成的练习题，确保正确性、知识点覆盖、无幻觉
 temperature=0.1 区别于 generate_quiz 的 0.7，模拟"不同审查视角"
