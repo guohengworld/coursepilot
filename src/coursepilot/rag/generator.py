@@ -29,16 +29,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coursepilot.agent.memory import ContextManager, ContextView
 from coursepilot.config import settings
 from coursepilot.models import Course, Document, KnowledgePoint
+from coursepilot.rag.citation import CITATION_SYNTAX
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """你是 CoursePilot 课程助教，为大学生解答数学问题。
+# 引用格式契约来自 rag/citation.py 的 CITATION_SYNTAX（唯一来源），
+# guardrails 的引用检查与之一致。
+SYSTEM_PROMPT = f"""你是 CoursePilot 课程助教，为大学生解答数学问题。
 
 ## 回答规则
 
 1. **必须基于教材**：回答必须严格依据下面 <sources> 中提供的教材内容，
    不得编造教材中没有的事实、公式或定理
-2. **引用格式**：涉及教材内容时使用 <ref id="N" /> 引用，N 为 source id
+2. **引用格式**：涉及教材内容时使用 {CITATION_SYNTAX} 引用，N 为 source id
 3. **公式正确**：所有数学公式使用 LaTeX 语法，行内 $...$，独立行 $$...$$
 4. **超出范围拒绝回答**：如果问题涉及的内容完全不在 <sources> 中，
    必须明确回答"教材未涉及此内容，无法回答"，不得自行编造
@@ -48,11 +51,11 @@ SYSTEM_PROMPT = """你是 CoursePilot 课程助教，为大学生解答数学问
 
 ## 当前课程
 
-{course_context}
+{{course_context}}
 
 ## 参考教材内容
 
-{sources}
+{{sources}}
 """
 
 

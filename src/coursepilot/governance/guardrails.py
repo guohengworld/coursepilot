@@ -13,6 +13,8 @@ Usage:
 import re
 from typing import Any
 
+from coursepilot.rag.citation import count_citations
+
 
 def guard_answer(answer: str, context: str, sources: list[dict]) -> list[str]:
     """检查 LLM 生成的答案质量
@@ -40,8 +42,9 @@ def guard_answer(answer: str, context: str, sources: list[dict]) -> list[str]:
         if matched < 1:
             issues.append(f"回答可能未引用教材内容（匹配到 {matched}/{len(context_keywords)} 个关键词）")
 
-    # 2. 引用标记完整性：检查 [page:N] 格式的标记
-    citation_count = len(re.findall(r'\[page:\d+\]', answer))
+    # 2. 引用标记完整性：检查 <ref id="N" /> 格式的标记
+    #    （引用契约与 generator prompt 一致，见 rag/citation.py 的 CITATION_SYNTAX）
+    citation_count = count_citations(answer)
     if citation_count == 0 and len(answer) > 100:
         issues.append("较长回答缺少引用标记")
 

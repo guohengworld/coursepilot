@@ -1,6 +1,6 @@
 # CoursePilot
 
-> 面向高校课程的 AI 教学助手 —— 用 LangGraph 编排教学工作流，Agentic RAG 提供精准知识检索，MCP 协议将教学能力开放给任意 IDE 与客户端。适用于任意学科。
+> 面向学校课程的 AI 教学助手 —— 用 LangGraph 编排教学工作流，Agentic RAG 提供精准知识检索，MCP 协议将教学能力开放给任意 IDE 与客户端。适用于任意学科。
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue)
 ![LangGraph](https://img.shields.io/badge/LangGraph-1.0-green)
@@ -14,7 +14,7 @@
 
 CoursePilot 是一套**能自主执行教学任务的 AI 教学系统**。它用 LangGraph 有向状态图编排完整的教学工作流：理解学生意图 → 路由到对应 workflow → 节点逐步执行 → 关键步骤独立验证 → 持续改进学生画像。
 
-设计哲学：**纯 Workflow 驱动**——用确定性有向状态图编排教学流程，关键节点内嵌独立验证、确定性护栏、每步追踪与人类接管，而非依赖通用 Planner 动态规划。教学意图有限可枚举、执行路径确定，workflow 比通用 Agent 延迟更低、结果更可预测。适用于任意学科课程。
+设计哲学：**纯 Workflow 驱动**——用确定性有向状态图编排教学流程，关键节点内嵌独立验证、确定性护栏、每步追踪与人类接管，而非依赖通用 Planner 动态规划。教学意图有限可枚举、执行路径确定，结果更可预测。适用于任意学科课程。
 
 ---
 
@@ -28,22 +28,15 @@ CoursePilot 是一套**能自主执行教学任务的 AI 教学系统**。它用
 
 六阶段检索编排：查询改写 → BGE-M3 编码 → 混合检索（Milvus 向量 + BM25 + RRF 融合）→ bge-reranker-v2-m3 重排序 → 知识点金字塔扩展。并具备上下文充足性质检、复杂查询分解、多轮补搜、网络搜索兜底等 Agentic 能力。
 
-### 3. 两阶段文档导入管道
-
-- **阶段 A（每门课一次）**：解析教材 → 提取标题 → 构建知识点树（邻接表模型，深度 ≤ 4）
-- **阶段 B（每次上传）**：解析文档 → 按标题分割 → 匹配到知识点 → 生成知识单元
-
-支持 PDF（MinerU OCR）、DOCX、Markdown 三种格式，统一 `content_list` 中间格式。
-
-### 4. MCP Server
+### 3. MCP Server
 
 基于 Model Context Protocol 2.0，将课程查询、练习生成、学情诊断、复习计划等能力封装为 MCP 工具/Resources/Prompts，可接入任意 MCP 客户端（已测试 Trae 与 WorkBuddy）。提供 stdio 桥接器与 HTTP/SSE Gateway 两种部署模式。
 
-### 5. RAGAS 评估体系
+### 4. RAGAS 评估体系
 
 黄金数据集 + RAGAS 8 项指标 + 配置网格搜索，量化评估 RAG 各阶段表现，支持 baseline 对比与最优配置寻优。
 
-### 6. 治理与可观测性
+### 5. 治理与可观测性
 
 操作审计日志、RBAC 权限、确定性护栏、LangGraph native tracing、用户画像长期记忆。
 

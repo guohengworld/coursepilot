@@ -186,7 +186,7 @@ class TestGuardrails:
         assert not kw_issues, f"关键词应匹配成功，实际 issues={issues}"
 
     def test_long_answer_missing_citation(self):
-        """长回答（>100 字）缺少 [page:N] 引用标记"""
+        """长回答（>100 字）缺少 <ref id="N" /> 引用标记"""
         from coursepilot.governance.guardrails import guard_answer
         answer = "binary tree is a fundamental data structure. " * 6  # > 100 chars
         assert len(answer) > 100
@@ -196,7 +196,7 @@ class TestGuardrails:
     def test_answer_with_citation_passes(self):
         from coursepilot.governance.guardrails import guard_answer
         issues = guard_answer(
-            "binary tree is a data structure. [page:42]",
+            "binary tree is a data structure. <ref id=\"42\" />",
             "binary tree",
             []
         )
@@ -241,7 +241,7 @@ class TestGuardrails:
     def test_all_checks_pass(self):
         from coursepilot.governance.guardrails import guard_answer
         issues = guard_answer(
-            "binary tree preorder traversal visits root then left then right. [page:42]",
+            "binary tree preorder traversal visits root then left then right. <ref id=\"42\" />",
             "binary tree preorder traversal",
             [{"kp_path": "tree"}]
         )

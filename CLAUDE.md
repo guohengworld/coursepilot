@@ -2,6 +2,8 @@
 
 本文件为 Claude Code (claude.ai/code) 在处理本代码仓库时提供指导。
 
+开发规范见 `AGENTS.md`（代码真实性、调试纪律、安全规则、执行纪律），处理本仓库时须一并遵循。
+
 ## 常用命令
 
 ```bash
@@ -51,21 +53,7 @@ alembic upgrade head
 
 ## 系统架构
 
-CoursePilot 是一个面向高校课程的 AI 教学助手。后端技术栈：FastAPI + SQLAlchemy 异步模式 + PostgreSQL。文档解析：MinerU（PDF OCR）+ python-docx + 自定义 Markdown 解析器。RAG 引擎：BGE-M3 编码 + Milvus Lite 向量存储 + bge-reranker-v2-m3 重排序 + DeepSeek LLM 生成。
-
-## 两阶段导入管道（核心机制）
-
-核心数据流分为两个在不同时间执行的阶段：
-
-**阶段 A — 构建知识点树（每门课程仅执行一次）**：
-`scripts/seed_knowledge.py` 或 `scripts/batch_ingest.py` →
-单次解析文件 → 提取标题（text_level ≤ 4）→ `headings_to_syllabus()` 构建 `kp_path` 层级结构 → 插入 `knowledge_points` 表（基于 `parent_id` 的邻接表模型）
-
-**阶段 B — 将文档转换为知识单元（每次上传时执行）**：
-`POST /courses/upload` → `pipeline.run_ingestion()` →
-解析文件 → `parser_utils.extract_knowledge_units()` 按标题分割文本 → `KPSplitter.assign()` 将每个文本块匹配到对应的知识点 → 插入 `knowledge_units` 表
-
-**关键规则**：严禁对同一文件重复解析。MinerU 解析必须检查是否走 GPU。`run_ingestion()` 支持传入 `preparsed_content_list` 参数以跳过重新解析。`seed_knowledge.py --ingest` 可在单次解析中同时完成上述两个阶段。对于多卷册课程（如上下册），批量脚本会将所有卷册的标题合并到共享的 KP 树中，同时为每一卷创建独立的 Document 记录。
+CoursePilot 是一个面向学校课程的 AI 教学助手。后端技术栈：FastAPI + SQLAlchemy 异步模式 + PostgreSQL。文档解析：MinerU（PDF OCR）+ python-docx + 自定义 Markdown 解析器。RAG 引擎：BGE-M3 编码 + Milvus Lite 向量存储 + bge-reranker-v2-m3 重排序 + DeepSeek LLM 生成。上层另有：Agent（LangGraph 编排 + 上下文记忆）、MCP 服务器（stdio 桥接 + 工具）、治理层（审计日志 / RBAC / 生成护栏）、评估子系统（RAGAS）。前端为 `frontend/`（Vue 3 + Vite + Element Plus）。
 
 ## 关键文件清单
 
@@ -73,10 +61,13 @@ CoursePilot 是一个面向高校课程的 AI 教学助手。后端技术栈：F
 | :--- | :--- |
 | src/coursepilot/config.py | 所有配置项，通过 pydantic-settings 从 .env 加载 |
 | src/coursepilot/db.py | 异步引擎，FastAPI 依赖注入用的 get_session()，脚本用的 get_session_etx() |
-| src/coursepilot/main.py | FastAPI 应用入口，注册 auth 和 courses 路由 |
+| src/coursepilot/main.py | FastAPI 应用入口，注册 auth/courses/agent/practice/admin 等路由 |
 | src/coursepilot/api/auth.py | 注册、登录（JWT）、获取当前用户信息 |
 | src/coursepilot/api/courses.py | 课程增删改查、上传并触发导入、文档列表、KP 树查询 |
 | src/coursepilot/api/deps.py | get_current_user（JWT → User）、require_superuser 权限校验 |
+| src/coursepilot/api/admin.py | 管理路由（用户/课程管理、审计查询） |
+| src/coursepilot/api/agent.py | Agent 会话、问答路由 |
+| src/coursepilot/api/practice.py | 练习、诊断、复习路由 |
 | src/coursepilot/ingestion/pipeline.py | run_ingestion() — B1→B6 流程编排 |
 | src/coursepilot/ingestion/pdf_parser.py | parse_pdf() — 封装 MinerU CLI，返回 {markdown, content_list} |
 | src/coursepilot/ingestion/docx_parser.py | parse_docx() — 同步解析（python-docx），返回相同格式 |
@@ -95,6 +86,12 @@ CoursePilot 是一个面向高校课程的 AI 教学助手。后端技术栈：F
 | src/coursepilot/rag/summary_bridge.py | SummaryBridge — 知识单元摘要并发生成（thinking=disabled） |
 | src/coursepilot/rag/citation.py | Citation — 引用来源格式化 |
 | src/coursepilot/evaluation/rag_eval.py | RAGEvaluator — RAGAS 四大指标评估器 |
+| src/coursepilot/models/ | 14 张表的 SQLAlchemy ORM 模型定义 |
+| src/coursepilot/auth/ | 密码哈希（passlib）、JWT 编解码、bootstrap 初始化 |
+| src/coursepilot/agent/ | LangGraph Agent（节点、技能、记忆 compactor/context_manager/retriever） |
+| src/coursepilot/mcp/ | MCP 服务器（CLI 入口、stdio 网关、工具/资源定义） |
+| src/coursepilot/governance/ | 审计日志、RBAC、生成护栏（guardrails） |
+| frontend/ | Vue 3 + Vite + Element Plus 前端 |
 | scripts/seed_knowledge.py | CLI 工具：解析 PDF → 提取标题 → 构建 KP 树；--ingest 参数可同时执行知识单元导入 |
 | scripts/batch_ingest.py | 批量处理 tests/fixtures/pdfs/ 下的全部 8 个 PDF，按课程分组 |
 | scripts/rebuild_all.py | 清空重建所有课程的知识点和知识单元 |
@@ -131,7 +128,14 @@ CoursePilot 是一个面向高校课程的 AI 教学助手。后端技术栈：F
 
 ## 配置说明
 
-配置文件为项目根目录下的 `.env`。必填项：`DATABASE_URL=postgresql+asyncpg://...`、`JWT_SECRET_KEY=...`、`MINERU_MODEL_SOURCE=local`。所有默认值详见 `config.py`。
+配置文件为项目根目录下的 `.env`。必填项：`DATABASE_URL=postgresql+asyncpg://...`、`JWT_SECRET_KEY=...`。所有默认值详见 `config.py`。
+
+易错配置（默认值可能误导）：
+
+- `LLM_MODEL` 默认 `deepseek-v4-flash`。
+- 本地模型路径硬编码在 `config.py`：`F:/all-projs/models/bge-m3`、`F:/all-projs/models/bge-reranker-v2-m3`。
+- MCP API key 双别名：`COURSEPILOT_MCP_API_KEY`（优先）/ 旧别名 `MCP_API_KEY`。
+- `main.py` 在任何 torch import 前设置 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`，勿移动该行。
 
 ## 测试结构
 
@@ -156,6 +160,7 @@ tests/
 │   ├── test_gpu_availability.py # GPU 环境检测
 │   ├── test_agent_workflow.py # Agent 端到端工作流
 │   └── test_agent_db.py    # Agent 数据库集成
+├── test_mcp/                # MCP 专项测试（CLI、网关、stdio、schema 校验）
 ├── rag/                    # RAG 专项测试
 │   └── test_ragas.py       # RAGAS 评估
 ├── milvus/                 # Milvus 专项测试

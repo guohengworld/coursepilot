@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import re
 
-CITATION_PATTERN = re.compile(r'<ref\s+id="(\d+)"\s*/>')
+# 引用格式契约（唯一来源）：LLM prompt、guardrails 检查、API 解析共用此格式。
+# 修改引用格式时必须同步修改 CITATION_SYNTAX 与 CITATION_PATTERN。
+CITATION_SYNTAX = '<ref id="N" />'  # 展示/提示用，N 为 source id
+CITATION_PATTERN = re.compile(r'<ref\s+id="(\d+)"\s*/>')  # 解析用
 
 
 def validate_citations(
