@@ -117,10 +117,6 @@ class TestRoutingPhase2:
         from coursepilot.agent.routing import route_by_intent
         assert route_by_intent({"intent": "diagnose"}) == "diagnose"
 
-    def test_route_by_intent_code_help(self):
-        from coursepilot.agent.routing import route_by_intent
-        assert route_by_intent({"intent": "code_help"}) == "query_rag"
-
     def test_route_by_intent_unknown_fallback(self):
         from coursepilot.agent.routing import route_by_intent
         assert route_by_intent({"intent": "unknown"}) == "query_rag"
@@ -135,10 +131,6 @@ class TestRoutingPhase2:
     def test_route_after_rag_question(self):
         from coursepilot.agent.routing import route_after_rag
         assert route_after_rag({"intent": "question"}) == "finalize"
-
-    def test_route_after_rag_code_help(self):
-        from coursepilot.agent.routing import route_after_rag
-        assert route_after_rag({"intent": "code_help"}) == "finalize"
 
     def test_route_after_rag_practice(self):
         from coursepilot.agent.routing import route_after_rag
@@ -1164,28 +1156,6 @@ class TestPhase2E2E:
             result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid4())}})
 
         assert result["intent"] == "review"
-        assert result["error"] is None
-
-    @pytest.mark.asyncio
-    async def test_code_help_path(self, mock_asf):
-        """code_help 路径：build_context → classify → query_rag → finalize（Phase 3 增强）"""
-        graph = self._build_graph()
-        state = self._make_state(query="这个代码为什么报错")
-
-        with (
-            patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
-            patch("coursepilot.agent.nodes.build_context_logic") as mock_bc,
-            patch("coursepilot.agent.nodes.classify_intent", return_value=("code_help", ZERO_TOKENS)),
-            patch("coursepilot.agent.nodes.query_rag") as mock_qr,
-            patch("coursepilot.agent.nodes.update_qa_record") as mock_uq,
-        ):
-            mock_bc.return_value = ({"name": "OS"}, None, [])
-            mock_qr.return_value = ("代码相关回答", "上下文", {}, [], ZERO_TOKENS)
-            mock_uq.return_value = 0
-
-            result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid4())}})
-
-        assert result["intent"] == "code_help"
         assert result["error"] is None
 
     @pytest.mark.asyncio

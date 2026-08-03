@@ -257,6 +257,8 @@ async def run_ingestion(
                 raise ValueError(f"不支持的文件格式: .{ext}")
 
             content_list = result.get("content_list", [])
+            # 真实页数：pdf_parser 返回 pages（docx/md 无页数概念，保持 None）
+            doc.page_count = result.get("pages")
             parse_config = result.get("_config", {})
             parse_timings = result.get("_timings", {})
             logger.info(
@@ -335,7 +337,6 @@ async def run_ingestion(
             session.add(ku)
 
         doc.status = "ready"
-        doc.page_count = len(units)
         # ingestion 完成后清除 BM25 缓存，下次检索时自动重建
         BM25Indexer.invalidate(str(doc.course_id))
         await session.flush()

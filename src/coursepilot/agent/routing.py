@@ -24,8 +24,8 @@ def route_by_intent(state: dict) -> str:
         "human_review" — 需要审批的路径
         "get_mastery"  — practice / review（需要掌握度）
         "diagnose"     — diagnose
-        "decompose"    — complex question / code_help（先分解再检索）
-        "query_rag"    — simple question / code_help（快速通道）
+        "decompose"    — complex question（先分解再检索）
+        "query_rag"    — simple question（快速通道）
     """
     intent = state.get("intent", "")
     complexity = state.get("complexity", "simple")
@@ -34,7 +34,7 @@ def route_by_intent(state: dict) -> str:
         return "human_review"      # 需要教师审批
     elif intent == "diagnose":
         return "diagnose"          # 诊断只读，无需审批
-    elif intent in ("question", "code_help"):
+    elif intent == "question":
         if complexity == "complex" and rag_config.enable_routing:
             return "decompose"      # 复杂 → 先分解再检索
         return "query_rag"         # 简单 → 快速通道
@@ -56,7 +56,7 @@ def route_after_rag(state: dict) -> str:
 
     Return:
         "generate_quiz" — practice / review（需要生成练习题）
-        "finalize"      — question / code_help / diagnose（直接结束）
+        "finalize"      — question / diagnose（直接结束）
     """
     intent = state.get("intent", "question")
     return "generate_quiz" if intent in ("practice", "review") else "finalize"

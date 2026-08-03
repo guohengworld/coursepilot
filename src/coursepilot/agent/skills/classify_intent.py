@@ -1,7 +1,7 @@
 """意图分类 Skill：基于 LLM 的意图识别 + 复杂度判断
 
 返回结构化分类结果，包含：
-  - intent: question / practice / diagnose / review / code_help
+  - intent: question / practice / diagnose / review
   - complexity: simple / complex
 """
 import json
@@ -23,7 +23,6 @@ CLASSIFY_SYSTEM = """你是一个教学系统意图分类器。
 - practice: 明确要求"出题"、"练习"、"做几道题"、"考考我"、"来点题目"等练习请求
 - diagnose: 想了解自己的学习情况、薄弱环节，如"帮我分析"、"我学得怎么样"、"掌握情况"
 - review: 想复习，如"帮我复习"、"总结本章重点"、"制定复习计划"
-- code_help: 代码相关问题，如"这个代码为什么报错"、"帮我调试"
 
 ## 复杂度判断
 分析问题是否需要多源信息拼接、跨知识点推理或对比分析：
@@ -45,7 +44,7 @@ async def classify_intent(
     """返回 (intent, complexity, token_info)。
 
     Returns:
-        intent: question / practice / diagnose / review / code_help
+        intent: question / practice / diagnose / review
         complexity: simple / complex
         token_info: {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}
     """
@@ -110,7 +109,7 @@ async def classify_intent(
             raw_complexity = result.get("complexity", "").strip().lower()
             raw_reasoning = result.get("reasoning", "")
 
-            valid_intents = {"question", "practice", "diagnose", "review", "code_help"}
+            valid_intents = {"question", "practice", "diagnose", "review"}
             valid_complexities = {"simple", "complex"}
 
             if raw_intent in valid_intents:
@@ -128,7 +127,7 @@ async def classify_intent(
     except (json.JSONDecodeError, AttributeError) as e:
         # 兜底：尝试直接按文本解析（兼容旧格式）
         cleaned = raw.strip().lower().split("\n")[0].strip()
-        valid_intents = {"question", "practice", "diagnose", "review", "code_help"}
+        valid_intents = {"question", "practice", "diagnose", "review"}
         if cleaned in valid_intents:
             intent = cleaned
             logger.info("classify_intent 回退文本解析: intent=%s", intent)

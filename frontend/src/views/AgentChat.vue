@@ -334,7 +334,6 @@ function intentTagType(intent: string) {
     practice: 'success',
     diagnose: 'warning',
     review: 'info',
-    code_help: 'danger',
   }
   return map[intent] || 'info'
 }

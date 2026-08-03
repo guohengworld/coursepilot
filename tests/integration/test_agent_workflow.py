@@ -71,38 +71,6 @@ class TestQuestionWorkflow:
         mock_cls.assert_called_once()
         mock_qr.assert_called_once()
 
-    @pytest.mark.asyncio
-    async def test_code_help_uses_same_path(self, raw_session, std_data, real_asf):
-        """code_help 走同一条 query_rag 路径"""
-        uid, cid = std_data["user_id"], std_data["course_id"]
-
-        with (
-            patch("coursepilot.agent.nodes.async_session_factory", real_asf),
-            patch("coursepilot.agent.nodes.classify_intent",
-                  return_value=("code_help", ZERO_TOKENS)),
-            patch("coursepilot.agent.nodes.query_rag",
-                  return_value=MOCK_QA_ANSWER),
-            patch("coursepilot.agent.nodes.update_profile", new=AsyncMock()),
-        ):
-            from coursepilot.agent.graph import build_agent_graph
-            from langgraph.checkpoint.memory import MemorySaver
-            with patch("coursepilot.agent.graph._get_saver", return_value=MemorySaver()):
-                graph = await build_agent_graph()
-
-            state = {
-                "query": "写一段进程调度代码", "course_id": str(cid),
-                "user_id": str(uid), "session_id": str(uuid.uuid4()),
-                "messages": [], "course_context": {}, "user_profile": None,
-                "recent_qa": [], "intent": "", "context": "",
-                "retrieved_metadata": {}, "answer": "", "sources": [],
-                "token_count": 0, "llm_calls": [], "error": None,
-            }
-            result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid.uuid4())}})
-
-        assert result["intent"] == "code_help"
-        assert result["token_count"] == 0
-
-
 class TestDiagnoseWorkflow:
     """diagnose 路径：build_context → classify → diagnose → finalize"""
 

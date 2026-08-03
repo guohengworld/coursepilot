@@ -25,7 +25,7 @@ class AgentState(TypedDict):
     recent_qa: list[dict]       # 最近 5 条问答
 
     # classify 节点输出
-    intent: str                 # question / practice / diagnose / review / code_help
+    intent: str                 # question / practice / diagnose / review
     complexity: str             # simple / complex（P0: Agentic RAG 智能路由）
 
     # query_rag 节点输出

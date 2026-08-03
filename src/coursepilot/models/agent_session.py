@@ -30,7 +30,7 @@ class AgentSession(Base):
         nullable=False, index=True, comment="课程 ID",
     )
     intent: Mapped[str] = mapped_column(
-        String(20), nullable=False, comment="question/practice/diagnose/review/code_help",
+        String(20), nullable=False, comment="question/practice/diagnose/review",
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending",
