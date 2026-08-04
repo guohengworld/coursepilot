@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from coursepilot.config import settings
 from coursepilot.models import Course, Document, KnowledgePoint, KnowledgeUnit
 from coursepilot.rag.bm25 import BM25Indexer
 
@@ -38,17 +39,53 @@ def _strip_latex(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _math_ratio(text: str) -> float:
+    """计算文本中 LaTeX 公式字符占比（0.0=纯文本, 1.0=纯公式）。
+
+    按 $ 成对统计：跳过连续 $（$$...$$ 块的左边界），再从其后找匹配的 $。
+    $$...$$ 与行内公式一并计入。
+    用于识别"公式型 unit"：公式占比高时规则摘要不可靠，需走 LLM 兜底。
+    """
+    if not text:
+        return 0.0
+    math_chars = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] != "$":
+            i += 1
+            continue
+        # 跳过连续的 $（$$ 或 $$...$$ 左边界）
+        j = i
+        while j < n and text[j] == "$":
+            j += 1
+        if j >= n:
+            break
+        end = text.find("$", j)
+        if end == -1:
+            break
+        # 公式区间从 i 到 end（含 $ 边界），计入占比
+        math_chars += end + 1 - i
+        i = end + 1
+    return math_chars / len(text)
+
+
 def _make_rule_summary(unit: dict, max_len: int = 80) -> str:
     """为 KnowledgeUnit 生成规则摘要（不调用 LLM）。
 
     策略：
-      1. 优先使用 heading 信息
-      2. 取首句自然语言（避开公式）
-      3. 若内容以公式为主，则生成"公式推导：..."
+      1. 公式为主（公式字符占比 ≥ 30%）→ 返回空串，交由 LLM 兜底生成可检索摘要
+      2. 优先使用 heading 信息
+      3. 取首句自然语言（避开公式）
     """
     content = unit.get("content", "")
     meta = unit.get("meta_data", {}) or {}
     heading = meta.get("heading", "").strip()
+
+    # 公式型 unit：规则摘要退化为泛化描述（如"公式推导与运算"），检索区分度差。
+    # 返回空串标记"需要 LLM 摘要"（pipeline B4 对空 summary 调 SummaryBridge）。
+    if _math_ratio(content) >= 0.3:
+        return ""
 
     # 清理内容中的 LaTeX，便于提取自然语言
     clean = _strip_latex(content)
@@ -70,11 +107,7 @@ def _make_rule_summary(unit: dict, max_len: int = 80) -> str:
     if first:
         return first
 
-    # 3. 全是公式，生成兜底摘要
-    if "$" in content:
-        return "公式推导与运算"
-
-    # 4. 兜底
+    # 3. 兜底
     return clean[:max_len] if clean else "教材内容"
 
 
@@ -291,6 +324,10 @@ async def run_ingestion(
             content_list,
             document_id=str(doc.id),
             kp_id="",  # 暂时为空，下面由 KPSplitter 分配
+            # 分块参数由配置驱动（修复"配置欺骗"：kp_max_tokens/chunk_overlap 此前未生效）
+            # 512 tokens ≈ 768 字符（中文 1 token ≈ 1.5 字符）
+            target_chars=int(settings.kp_max_tokens * 1.5),
+            overlap=settings.chunk_overlap,
         )
         logger.info("B2: 切分完成 → %d 个知识单元", len(units))
 
@@ -303,13 +340,23 @@ async def run_ingestion(
             units = splitter.assign(units)
         logger.info("B3: KP 分配完成")
 
-        # ── B4: 规则摘要生成（替换 LLM SummaryBridge）────
+        # ── B4: 规则摘要 + 公式型 unit LLM 兜底 ─────────
         logger.info("B4: 开始规则摘要（%d 个 unit）...", len(units))
         t0 = time.monotonic()
         for u in units:
             u["summary"] = _make_rule_summary(u)
         timings["summary"] = round(time.monotonic() - t0, 2)
         logger.info("B4: 规则摘要完成，耗时=%.2fs", timings["summary"])
+
+        # 公式型 unit（规则摘要为空）走 LLM 兜底：
+        # 扫描件 LaTeX 不可靠，公式符号感知方案不可行，改为让 LLM 把公式
+        # "翻译"为可检索的自然语言描述（SummaryBridge 幂等：只处理空 summary）。
+        from coursepilot.rag.summary_bridge import SummaryBridge
+
+        t1 = time.monotonic()
+        await SummaryBridge().run(units)
+        timings["summary_llm"] = round(time.monotonic() - t1, 2)
+        logger.info("B4: LLM 兜底摘要完成，耗时=%.2fs", timings["summary_llm"])
 
         # 回填 kp_path 到 units（Milvus 入库需要）
         kp_map = {n["id"]: n["kp_path"] for n in kp_nodes}

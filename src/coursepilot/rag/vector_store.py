@@ -33,6 +33,14 @@ if _os.name == "nt":
 COLLECTION_NAME = "knowledge_units"
 DIM = config.dim  # 1024
 
+# dense 索引：HNSW（替代 FLAT 全量扫描，数据增长后延迟不再线性上升）
+# M=16：每个节点最大连接数（Milvus 推荐 4-64，数据量万级 16 足够）
+# efConstruction=64：建图质量（越大构建越慢、图质量越高，Milvus 推荐 8-512）
+DENSE_INDEX_TYPE = "HNSW"
+DENSE_INDEX_PARAMS = {"M": 16, "efConstruction": 64}
+# 查询时 ef：召回与延迟折中（需 >= top_k；FLAT 索引忽略该参数）
+HNSW_SEARCH_EF = 128
+
 
 class VectorStore:
     """
@@ -73,6 +81,8 @@ class VectorStore:
         """创建 collection + 双索引，幂等（已存在则跳过）"""
         if self.client.has_collection(COLLECTION_NAME):
             logger.info("已存在 collection %s，跳过创建", COLLECTION_NAME)
+            # 索引类型不匹配时无损重建（drop 索引 + 重建，数据保留）
+            self._ensure_dense_index()
             self.client.load_collection(COLLECTION_NAME)
             return
 
@@ -96,9 +106,9 @@ class VectorStore:
         index_params = self.client.prepare_index_params()
         index_params.add_index(
             field_name="dense_vec",
-            index_type="FLAT",  # 修改: 使用标准的 FLAT 索引
+            index_type=DENSE_INDEX_TYPE,
             metric_type="IP",
-            # params={"nlist": 128},    # 移除: FLAT 索引不需要 nlist 参数
+            params=DENSE_INDEX_PARAMS,
         )
 
         self.client.create_collection(
@@ -121,6 +131,48 @@ class VectorStore:
         )
         self.client.load_collection(COLLECTION_NAME)
         logger.info("创建 collection %s 成功", COLLECTION_NAME)
+
+    def _ensure_dense_index(self) -> None:
+        """检测 dense 索引类型；非 HNSW 时无损重建（drop 索引 + 重建，数据保留）。
+
+        从 FLAT 迁移到 HNSW 不需要重插数据：Milvus 的索引独立于数据，
+        drop_index + create_index 即可完成切换。检测失败时静默跳过，
+        由现有索引继续服务，不中断启动。
+        """
+        try:
+            info = self.client.describe_index(COLLECTION_NAME, index_name="dense_vec")
+            current = (info or {}).get("index_type", "").upper()
+        except Exception as exc:
+            logger.debug("describe_index 失败，跳过索引重建检查: %s", exc)
+            return
+        if current == DENSE_INDEX_TYPE:
+            return
+
+        logger.warning(
+            "dense 索引类型为 %s（预期 %s），无损重建索引中（数据保留）...",
+            current or "未知", DENSE_INDEX_TYPE,
+        )
+        self.client.drop_index(COLLECTION_NAME, index_name="dense_vec")
+        index_params = self.client.prepare_index_params()
+        index_params.add_index(
+            field_name="dense_vec",
+            index_type=DENSE_INDEX_TYPE,
+            metric_type="IP",
+            params=DENSE_INDEX_PARAMS,
+        )
+        self.client.create_index(COLLECTION_NAME, index_params)
+        logger.info("dense 索引已重建为 %s", DENSE_INDEX_TYPE)
+
+    def _dense_search_params(self) -> dict:
+        """构造 dense 检索请求参数：HNSW 传 ef，其他索引类型保持兼容（忽略 ef）。"""
+        try:
+            info = self.client.describe_index(COLLECTION_NAME, index_name="dense_vec")
+            current = (info or {}).get("index_type", "").upper()
+        except Exception:
+            current = ""
+        if current == "HNSW":
+            return {"metric_type": "IP", "params": {"ef": HNSW_SEARCH_EF}}
+        return {"metric_type": "IP", "params": {}}
 
     def _ensure_loaded(self) -> None:
         """确保 collection 存在并已加载（幂等）"""
@@ -182,11 +234,11 @@ class VectorStore:
 
         self._ensure_loaded()
 
-        # Dense 检索请求
+        # Dense 检索请求（HNSW 索引时携带 ef 参数）
         dense_req = AnnSearchRequest(
             data=[dense_vec],
             anns_field="dense_vec",
-            param={"metric_type": "IP", "params": {}},
+            param=self._dense_search_params(),
             limit=config.dense_top_k,
         )
 
@@ -203,7 +255,10 @@ class VectorStore:
 
         filter_expr = {"course_id": course_id}
 
-        print(f"[vector_store] hybrid_search 开始 (course={course_id}, dense_top_k={config.dense_top_k}, sparse={config.enable_sparse})")
+        logger.debug(
+            "hybrid_search 开始 (course=%s, dense_top_k=%d, sparse=%s)",
+            course_id, config.dense_top_k, config.enable_sparse,
+        )
         t0 = __import__("time").monotonic()
         try:
             results = self.client.hybrid_search(
@@ -215,10 +270,13 @@ class VectorStore:
                 limit=top_k,
             )
             elapsed = (__import__("time").monotonic() - t0) * 1000
-            print(f"[vector_store] hybrid_search 完成, 耗时={elapsed:.0f}ms, 结果数={len(results[0]) if results else 0}")
+            logger.info(
+                "hybrid_search 完成, 耗时=%.0fms, 结果数=%d",
+                elapsed, len(results[0]) if results else 0,
+            )
         except Exception as e:
             elapsed = (__import__("time").monotonic() - t0) * 1000
-            print(f"[vector_store] hybrid_search 失败, 耗时={elapsed:.0f}ms, 错误={e}")
+            logger.error("hybrid_search 失败, 耗时=%.0fms, 错误=%s", elapsed, e)
             raise
 
         # pymilvus 3.0 返回 [{'id': ..., 'distance': ..., 'entity': {...}}, ...]
@@ -278,7 +336,7 @@ class VectorStore:
         """查询某课程的全部向量元数据（不含向量本身）"""
         self._ensure_loaded()
         filter_expr = f'course_id == "{course_id}"'
-        print(f"查询条件: {filter_expr}")  # 确认条件正确
+        logger.debug("query_by_course 条件: %s", filter_expr)
         return self.client.query(
             collection_name=COLLECTION_NAME,
             filter=filter_expr,

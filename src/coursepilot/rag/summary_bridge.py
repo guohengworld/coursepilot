@@ -123,9 +123,9 @@ class SummaryBridge:
                     elapsed = time.time() - t0
                     rate = completed / elapsed if elapsed > 0 else 0
                     eta = (pending_count - completed) / rate if rate > 0 else 0
-                    print(
-                        f"     SummaryBridge [{completed}/{pending_count}] "
-                        f"{rate:.1f}/s ETA:{eta:.0f}s fail:{failed}"
+                    logger.info(
+                        "SummaryBridge [%d/%d] %.1f/s ETA:%.0fs fail:%d",
+                        completed, pending_count, rate, eta, failed,
                     )
 
         await asyncio.gather(*[generate_one(idx, unit) for idx, unit in pending])

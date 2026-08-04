@@ -807,7 +807,6 @@ class RAGEvaluator:
             "enable_kp_expand": rag_config.enable_kp_expand,
             "kp_expand_mode": getattr(rag_config, "kp_expand_mode", "full"),
             "kp_neighbor_window": getattr(rag_config, "kp_neighbor_window", 2),
-            "level_penalty": rag_config.level_penalty,
         }
         # 合并实际生效的 overrides（覆盖默认值）
         snapshot.update(self.overrides)

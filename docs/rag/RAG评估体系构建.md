@@ -209,7 +209,6 @@ RAG 管线所有可配置参数在 `src/coursepilot/rag/config.py` 的 `RAGConfi
 | `rrf_k` | `60` | RRF 融合参数 `k`，控制稀疏/稠密检索结果的排序平衡 |
 | `dense_weight` | `0.5` | Dense 检索在 RRF 融合中的权重（0~1），sparse 权重自动为 `1 - dense_weight` |
 | `rerank_top_k` | `5` | 重排序后最终送入生成器的 chunk 数量 |
-| `level_penalty` | `0.0` | 层级 KP 树的深度惩罚系数（仅 `enable_kp_expand=True` 时生效） |
 
 #### 5.1.4 BM25 参数
 
@@ -229,7 +228,7 @@ RAG 管线所有可配置参数在 `src/coursepilot/rag/config.py` 的 `RAGConfi
 
 ### 5.2 网格搜索空间
 
-网格搜索聚焦 **5 个对 RAG 效果影响最大的参数**，其余参数保持默认值：
+网格搜索聚焦 **4 个对 RAG 效果影响最大的参数**，其余参数保持默认值：
 
 | 参数 | 默认值 | 搜索范围 | 影响 |
 | :--- | :--- | :--- | :--- |
@@ -237,7 +236,6 @@ RAG 管线所有可配置参数在 `src/coursepilot/rag/config.py` 的 `RAGConfi
 | `rerank_top_k` | 5 | [3, 5, 8, 10] | 重排序后送入生成器的 chunk 数 |
 | `context_max_chars` | 5000 | [4000, 6000, 8000, 10000] | 生成器上下文窗口利用率 |
 | `dense_weight` | 0.5 | [0.3, 0.5, 0.7] | 稠密检索在 RRF 中的权重 |
-| `level_penalty` | 0.0 | [0.0, 0.1, 0.2] | 层级 KP 树的深度惩罚 |
 
 > 如需搜索其他参数（如 `reranker_min_score`、`bm25_top_k` 等），可通过 `--params` 自定义网格：  
 > `PYTHONPATH=src python -m eval.eval_ragas grid --params '{"reranker_min_score":[0.2,0.3,0.4]}'`
@@ -253,11 +251,7 @@ Round 2: rerank_top_k × context_max_chars（4×4=16 组合）
     → 固定 Round 1 最优 rrf_k + dense_weight
     → 目标：找到最优生成输入规模
 
-Round 3: level_penalty（3 组合）
-    → 仅当 KP 树深度 > 3 时执行
-    → 目标：微调层级衰减
-
-总计：12 + 16 + 3 = 31 次评估
+总计：12 + 16 = 28 次评估
 ```
 
 ### 5.4 成本估算

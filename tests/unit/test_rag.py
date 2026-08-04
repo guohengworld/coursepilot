@@ -390,6 +390,37 @@ class TestVectorStore:
         assert len(rows) >= 1
         assert rows[0]["uuid"] == "query-test-1"
 
+    def test_dense_index_is_hnsw(self, vector_store):
+        """新 collection 的 dense 索引应为 HNSW"""
+        info = vector_store.client.describe_index("knowledge_units", index_name="dense_vec")
+        assert info.get("index_type", "").upper() == "HNSW"
+
+    def test_ensure_dense_index_migrates_flat_to_hnsw(self, vector_store):
+        """dense 索引为 FLAT 时，自动无损重建为 HNSW"""
+        with patch.object(
+            vector_store.client, "describe_index", return_value={"index_type": "FLAT"}
+        ), patch.object(vector_store.client, "drop_index") as mock_drop, \
+            patch.object(vector_store.client, "create_index") as mock_create:
+            vector_store._ensure_dense_index()
+        mock_drop.assert_called_once_with("knowledge_units", index_name="dense_vec")
+        mock_create.assert_called_once()
+
+    def test_ensure_dense_index_skips_when_hnsw(self, vector_store):
+        """索引已是 HNSW 时不做任何操作"""
+        from coursepilot.rag.vector_store import DENSE_INDEX_TYPE
+        with patch.object(
+            vector_store.client, "describe_index", return_value={"index_type": DENSE_INDEX_TYPE}
+        ), patch.object(vector_store.client, "drop_index") as mock_drop, \
+            patch.object(vector_store.client, "create_index") as mock_create:
+            vector_store._ensure_dense_index()
+        mock_drop.assert_not_called()
+        mock_create.assert_not_called()
+
+    def test_dense_search_params_hnsw_has_ef(self, vector_store):
+        """HNSW 索引时 dense 检索携带 ef 参数"""
+        params = vector_store._dense_search_params()
+        assert params["params"]["ef"] > 0
+
 
 # ═══════════════════════════════════════════════════════════════
 # QueryRewriter 测试
@@ -484,23 +515,6 @@ class TestReranker:
         from coursepilot.rag.reranker import Reranker
         reranker = Reranker()
         assert reranker.rerank("query", [], top_k=5) == []
-
-    def test_level_penalty_applied(self):
-        """深层 KP 的层级惩罚更重，最终得分应更低"""
-        from coursepilot.rag.reranker import Reranker
-        reranker = Reranker()
-
-        query = "微积分基础概念"
-        candidates = [
-            {"content": "微积分是研究函数的微分与积分的数学分支", "kp_path": "微积分/基础", "score": 0.9},
-            {"content": "微积分是研究函数的微分与积分的数学分支", "kp_path": "微积分/基础/子章节/细节", "score": 0.9},
-        ]
-        results = reranker.rerank(query, candidates, top_k=2)
-        assert len(results) == 2
-        # 深度大的 KP 惩罚更重，最终得分应更低
-        shallow = next(r for r in results if r["kp_path"] == "微积分/基础")
-        deep = next(r for r in results if r["kp_path"] == "微积分/基础/子章节/细节")
-        assert shallow["rerank_score"] > deep["rerank_score"]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -675,12 +689,17 @@ class TestContextFormatting:
             {"content": "段落一", "kp_path": "数学/第一章", "score": 0.9},
             {"content": "段落二", "kp_path": "数学/第二章", "score": 0.8},
         ]
-        context, uuids = _format_units(units, max_chars=10000)
+        context, uuids, citation_map = _format_units(units, max_chars=10000)
         assert '<source id="1"' in context
         assert '<source id="2"' in context
         assert "段落一" in context
         assert "段落二" in context
         assert len(uuids) == 2
+        # 引用映射与 source id 一一对应
+        assert citation_map["1"]["kp_path"] == "数学/第一章"
+        assert citation_map["2"]["kp_path"] == "数学/第二章"
+        assert citation_map["1"]["uuid"] == ""
+        assert len(citation_map) == 2
 
     def test_format_units_truncation(self):
         from coursepilot.rag.retriever import _format_units
@@ -688,8 +707,9 @@ class TestContextFormatting:
             {"content": "x" * 5000, "kp_path": "数学/第一章", "score": 0.9},
             {"content": "y" * 5000, "kp_path": "数学/第二章", "score": 0.8},
         ]
-        context, uuids = _format_units(units, max_chars=200)
+        context, uuids, citation_map = _format_units(units, max_chars=200)
         # 应该只有第一个 source（第二个因为超上限被截断）
         assert '<source id="1"' in context
         assert len(context) < 5000  # 被截断了
         assert len(uuids) == 1
+        assert len(citation_map) == 1

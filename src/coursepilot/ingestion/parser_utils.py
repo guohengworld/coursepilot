@@ -188,6 +188,7 @@ def _split_text_v2(
     target_chars: int = 800,
     hard_lower: int = 400,
     hard_upper: int = 1200,
+    overlap: int = 0,
 ) -> list[str]:
     """数学块感知的文本切分器。
 
@@ -197,7 +198,9 @@ def _split_text_v2(
       3. 兜底在句号处切分
       4. 强制在 hard_upper 切分（避开数学块内部）
 
-    目标 ~800 字符/unit，硬下限 400，硬上限 1200。
+    目标 ~target_chars 字符/unit，硬下限 hard_lower，硬上限 hard_upper。
+    overlap > 0 时相邻 chunk 之间重叠 overlap 字符，缓解跨块语义断裂
+    （重叠起点不回退到已处理位置之前，避免死循环）。
     """
     if len(text) <= hard_upper:
         return [text]
@@ -251,7 +254,11 @@ def _split_text_v2(
             best_split = min(pos + hard_upper, len(text))
 
         chunks.append(text[pos:best_split].strip())
-        pos = best_split
+        # 重叠：下一个 chunk 起点回退 overlap 字符（不得回退到当前 pos 之前）
+        next_start = best_split - overlap if overlap > 0 else best_split
+        if next_start <= pos:
+            next_start = best_split
+        pos = next_start
 
     return chunks
 
@@ -279,6 +286,7 @@ def extract_knowledge_units(
     target_chars: int = 800,
     hard_lower: int = 400,
     hard_upper: int = 1200,
+    overlap: int = 0,
 ) -> list[dict]:
     """按标题层级分为 KnowledgeUnits。
 
@@ -293,6 +301,7 @@ def extract_knowledge_units(
     :param target_chars: 每 unit 目标字符数
     :param hard_lower: 切分硬下限
     :param hard_upper: 切分硬上限
+    :param overlap: 相邻 chunk 重叠字符数（缓解跨块语义断裂），默认 0 不重叠
     :return: List[dict]，可直接用于 KnowledgeUnit INSERT。
     """
     import logging, time
@@ -319,6 +328,7 @@ def extract_knowledge_units(
             target_chars=target_chars,
             hard_lower=hard_lower,
             hard_upper=hard_upper,
+            overlap=overlap,
         )
         for chunk in chunks:
             seq += 1

@@ -347,8 +347,12 @@ schema = {
 
 | 向量字段 | 索引类型 | 度量 | 参数 |
 |----------|---------|------|------|
-| `dense_vec` | IVF_FLAT | IP (Inner Product) | nlist=128 |
+| `dense_vec` | HNSW | IP (Inner Product) | M=16, efConstruction=64；查询 ef=128 |
 | `sparse_vec` | SPARSE_INVERTED_INDEX | IP | drop_ratio_build=0.2 |
+
+> 注：`dense_vec` 从 FLAT 迁移到 HNSW（数据量增长后查询延迟不再线性上升）。
+> 已存在的 collection 会在 `create_collection()` 幂等分支中**无损重建索引**
+> （drop 索引 + 重建，数据保留，无需重新 ingestion）。
 
 ### 4.3 操作接口
 

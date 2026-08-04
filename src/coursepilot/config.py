@@ -52,7 +52,6 @@ class Settings(BaseSettings):
     sparse_top_k: int = 20      # BM25 稀疏检索返回条数
     rrf_k: int = 60             # 融合参数（RRF 公式中的 k）
     rerank_top_n: int = 5       # 重排序后最终送入 LLM 的条数
-    level_penalty: float = 0.1  # 层级不匹配惩罚系数
 
     # ── Milvus ─────────────────────────────────────────
     # Milvus Lite 存储路径（基于项目根目录的相对路径，也支持绝对路径）

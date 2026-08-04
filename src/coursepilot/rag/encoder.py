@@ -31,8 +31,11 @@ def _select_device() -> str:
 
 def _load_model():
     """惰性加载 BGE-M3 模型，优先使用 GPU。"""
-    print(f"[DEBUG] embedding_model_path = '{settings.embedding_model_path}'")
-    print(f"[DEBUG] 目录是否存在: {Path(settings.embedding_model_path).exists()}")
+    logger.debug(
+        "embedding_model_path = '%s', 目录存在: %s",
+        settings.embedding_model_path,
+        Path(settings.embedding_model_path).exists(),
+    )
 
     from FlagEmbedding import BGEM3FlagModel
 

@@ -48,7 +48,6 @@ class RAGConfig:
     rrf_k: int = 60                   # RRF 融合参数 k，控制稀疏/稠密候选的排序平衡
     dense_weight: float = 0.5         # dense 在 RRF 融合中的权重（0~1），sparse 权重 = 1 - dense_weight
     rerank_top_k: int = 5             # 重排序后最终送入 LLM 生成器的 chunk 数量
-    level_penalty: float = 0.0        # KP 树深度惩罚系数（enable_kp_expand=True 时生效）
 
     # ── BM25 参数 ───────────────────────────────────────────────
     bm25_top_k: int = 20              # BM25 检索返回候选条数（enable_bm25=True 时生效）

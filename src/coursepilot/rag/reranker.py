@@ -101,7 +101,7 @@ class Reranker:
                 c["rerank_score"] = 1.0 - i * 0.01
             return candidates[:top_k]
 
-        print(f"[reranker] 开始重排序, 候选数={len(candidates)}, top_k={top_k}")
+        logger.info("开始重排序: 候选数=%d, top_k=%d", len(candidates), top_k)
         t0 = __import__("time").monotonic()
 
         try:
@@ -115,13 +115,7 @@ class Reranker:
             return candidates[:top_k]
 
         elapsed = (__import__("time").monotonic() - t0) * 1000
-        print(f"[reranker] compute_score 完成, 耗时={elapsed:.0f}ms")
-
-        # 层级惩罚：更深的 kp_path 给轻微加分
-        for i, c in enumerate(candidates):
-            depth = c.get("kp_path", "").count("/") + 1
-            penalty = min((depth - 1) * 0.02, config.level_penalty)
-            scores[i] -= penalty
+        logger.info("reranker compute_score 完成, 耗时=%.0fms", elapsed)
 
         # 合并得分
         for i, c in enumerate(candidates):
@@ -134,4 +128,14 @@ class Reranker:
         ]
 
         filtered.sort(key=lambda x: x["rerank_score"], reverse=True)
+        # 兜底：阈值过滤后为空时降级为不过滤阈值，
+        # 避免空 context 进入 LLM（完整检索链路白白消耗后才被兜底拦截）
+        if not filtered:
+            logger.warning(
+                "reranker 阈值 %.2f 过滤后为空，降级返回未过滤的 top-%d（需检查阈值配置或候选质量）",
+                config.reranker_min_score,
+                top_k,
+            )
+            candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
+            return candidates[:top_k]
         return filtered[:top_k]

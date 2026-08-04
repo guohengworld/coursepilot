@@ -171,15 +171,18 @@ class Retriever:
     ) -> list[dict]:
         """对比类问题：对两个概念分别检索后合并候选集。
 
-        分别编码+检索概念 A 和概念 B，合并去重后保留 top_k 候选。
+        每个概念只检索一次（编码 + Milvus + BM25 在单次循环内完成），
+        同时收集分数与原始 dict，避免二次检索（原实现每概念检索 2 遍共 4 次）。
+        已有 Agentic RAG 多轮补搜兜底，无需对对比类问题强制重复检索。
         """
         import time as _time
 
         all_candidates: dict[str, float] = {}  # uuid -> max_score
+        merged_pool: dict[str, dict] = {}      # uuid -> 原始 dict（rrf_fuse 输出）
         for concept in concepts:
             t0 = _time.monotonic()
             concept_query = f"{rewritten_query} {concept}"
-            print(f"[dual_concept] 检索词: '{concept_query[:80]}'")
+            logger.debug("dual_concept 检索词: '%s'", concept_query[:80])
             vecs = self.encoder.encode_query(concept_query)
             milvus = self.vector_store.hybrid_search(
                 vecs["dense"], vecs["sparse"], course_id, top_k=20,
@@ -201,33 +204,14 @@ class Retriever:
                     score = c.get("rrf_score", c.get("score", 0))
                     if uid not in all_candidates or score > all_candidates[uid]:
                         all_candidates[uid] = score
-            print(f"[dual_concept] 概念'{concept}'检索完成, "
-                  f"候选={len(merged)}, 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+                    merged_pool[uid] = c  # 同一次检索即保存原始 dict
+            logger.debug(
+                "dual_concept 概念'%s'检索完成, 候选=%d, 耗时=%.0fms",
+                concept, len(merged), (_time.monotonic() - t0) * 1000,
+            )
 
         # 合并排序，取 top N
         sorted_uuids = sorted(all_candidates, key=lambda u: all_candidates[u], reverse=True)
-        # 回查原始数据（需要从结果中获取原始 dict）
-        # 简单做法：用最后一个 merged 中的完整数据
-        merged_pool: dict[str, dict] = {}
-        for c in concepts:
-            concept_query = f"{rewritten_query} {c}"
-            vecs = self.encoder.encode_query(concept_query)
-            milvus = self.vector_store.hybrid_search(
-                vecs["dense"], vecs["sparse"], course_id, top_k=20,
-            )
-            for item in milvus:
-                uid = item.get("uuid", "")
-                if uid:
-                    merged_pool[uid] = item
-            if config.enable_bm25:
-                bm25 = await self.bm25_indexer.search(
-                    session, concept_query, course_id, top_k=config.bm25_top_k,
-                )
-                for item in bm25:
-                    uid = item.get("uuid", "")
-                    if uid:
-                        merged_pool[uid] = item
-
         result = []
         for uid in sorted_uuids[:20]:
             if uid in merged_pool:
@@ -235,7 +219,7 @@ class Retriever:
                 item["score"] = all_candidates[uid]
                 result.append(item)
 
-        print(f"[dual_concept] 双概念检索合并完成, 总候选={len(result)}")
+        logger.debug("dual_concept 双概念检索合并完成, 总候选=%d", len(result))
         return result
 
     async def retrieve(
@@ -251,7 +235,8 @@ class Retriever:
 
         :return (formatted_context, metadata)
           - formatted_context: XML 格式的教材内容，直接送入 LLM
-          - metadata: {query_raw, query_rewritten, top_rerank_scores, source_kp_paths, candidate_count}
+          - metadata: {query_raw, query_rewritten, top_rerank_scores, source_kp_paths,
+                      context_uuids, citation_map, candidate_count}
         """
         import time as _time
         t_total = _time.monotonic()
@@ -261,32 +246,36 @@ class Retriever:
         if enable_rewrite and config.enable_rewrite:
             t0 = _time.monotonic()
             rewritten = await self.rewriter.rewrite(query)
-            print(f"[retriever] 阶段0-改写 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+            logger.info("[retriever] 阶段0-改写 耗时=%.0fms", (_time.monotonic() - t0) * 1000)
 
         # 对比类问题强制双概念检索
         concepts = _extract_comparison_concepts(query)
         if concepts:
-            print(f"[retriever] 检测到对比类问题，概念A={concepts[0]}, 概念B={concepts[1]}")
+            logger.info(
+                "[retriever] 检测到对比类问题，概念A=%s, 概念B=%s",
+                concepts[0], concepts[1],
+            )
             candidates = await self._dual_concept_search(session, rewritten, course_id, concepts)
             # 编码改写后的查询，供阶段4 KP 扩展精排使用
             t0 = _time.monotonic()
             vecs = self.encoder.encode_query(rewritten)
-            print(f"[retriever] 阶段1-编码(对比类) 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+            logger.info("[retriever] 阶段1-编码(对比类) 耗时=%.0fms", (_time.monotonic() - t0) * 1000)
         else:
             # 阶段1：BGE-M3 编码
             t0 = _time.monotonic()
-            print("[retriever] 阶段1-编码 开始...")
             search_query = rewritten
             vecs = self.encoder.encode_query(search_query)
-            print(f"[retriever] 阶段1-编码 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+            logger.info("[retriever] 阶段1-编码 耗时=%.0fms", (_time.monotonic() - t0) * 1000)
 
             # 阶段2a：Milvus 混合检索 + RRF
             t0 = _time.monotonic()
-            print("[retriever] 阶段2-检索 开始...")
             milvus_candidates = self.vector_store.hybrid_search(
                 vecs["dense"], vecs["sparse"], course_id, top_k=20
             )
-            print(f"[retriever] 阶段2-检索 耗时={(_time.monotonic()-t0)*1000:.0f}ms, Milvus候选数={len(milvus_candidates)}")
+            logger.info(
+                "[retriever] 阶段2-检索 耗时=%.0fms, Milvus候选数=%d",
+                (_time.monotonic() - t0) * 1000, len(milvus_candidates),
+            )
 
             # 阶段2b：BM25 检索
             bm25_candidates: list[dict] = []
@@ -295,7 +284,10 @@ class Retriever:
                 bm25_candidates = await self.bm25_indexer.search(
                     session, search_query, course_id, top_k=config.bm25_top_k,
                 )
-                print(f"[retriever] 阶段2b-BM25 耗时={(_time.monotonic()-t1)*1000:.0f}ms, BM25候选数={len(bm25_candidates)}")
+                logger.info(
+                    "[retriever] 阶段2b-BM25 耗时=%.0fms, BM25候选数=%d",
+                    (_time.monotonic() - t1) * 1000, len(bm25_candidates),
+                )
 
             # 阶段2c：RRF 融合 Milvus + BM25
             rrf_top_k = 30
@@ -306,23 +298,22 @@ class Retriever:
                     top_k=rrf_top_k,
                     weights=[config.dense_weight, 1.0 - config.dense_weight],
                 )
-                print(f"[retriever] 阶段2c-RRF融合 候选数={len(candidates)}")
+                logger.info("[retriever] 阶段2c-RRF融合 候选数=%d", len(candidates))
             else:
                 candidates = milvus_candidates
 
         # 阶段3：重排序 → top-k
         t0 = _time.monotonic()
         if config.enable_rerank:
-            print("[retriever] 阶段3-重排序 开始...")
             top_units = self.reranker.rerank(rewritten, candidates, top_k=config.rerank_top_k)
-            print(f"[retriever] 阶段3-重排序 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+            logger.info("[retriever] 阶段3-重排序 耗时=%.0fms", (_time.monotonic() - t0) * 1000)
         else:
             # 不用重排序时，直接用 RRF score 排序取 top-k
             candidates.sort(key=lambda x : x.get("score", 0), reverse=True)
             for c in candidates:
                 c["rerank_score"] = c.get("score", 0)
             top_units = candidates[:config.rerank_top_k]
-            print(f"[retriever] 阶段3-跳过重排序, top_k={config.rerank_top_k}")
+            logger.info("[retriever] 阶段3-跳过重排序, top_k=%d", config.rerank_top_k)
 
         # 对比类问题：rerank 后确保两个概念至少各有一个 unit
         if concepts:
@@ -331,18 +322,25 @@ class Retriever:
         # 阶段4：KP 扩展（滑动窗口取 unit + query-unit 重排序）
         t0 = _time.monotonic()
         if config.enable_kp_expand:
-            print("[retriever] 阶段4-KP扩展 开始...")
-            context, context_uuids = await _kp_expand(
+            context, context_uuids, citation_map = await _kp_expand(
                 session, top_units, config.context_max_chars,
                 query=rewritten, reranker=self.reranker,
                 encoder=self.encoder, query_dense=vecs["dense"],
             )
-            print(f"[retriever] 阶段4-KP扩展 耗时={(_time.monotonic()-t0)*1000:.0f}ms, context_chars={len(context)}")
+            logger.info(
+                "[retriever] 阶段4-KP扩展 耗时=%.0fms, context_chars=%d",
+                (_time.monotonic() - t0) * 1000, len(context),
+            )
         else:
-            context, context_uuids = _format_units(top_units, config.context_max_chars)
-            print(f"[retriever] 阶段4-格式化 耗时={(_time.monotonic()-t0)*1000:.0f}ms, context_chars={len(context)}")
+            context, context_uuids, citation_map = _format_units(
+                top_units, config.context_max_chars
+            )
+            logger.info(
+                "[retriever] 阶段4-格式化 耗时=%.0fms, context_chars=%d",
+                (_time.monotonic() - t0) * 1000, len(context),
+            )
 
-        print(f"[retriever] 总耗时={(_time.monotonic()-t_total)*1000:.0f}ms")
+        logger.info("[retriever] 总耗时=%.0fms", (_time.monotonic() - t_total) * 1000)
 
         metadata = {
             "query_raw": query,
@@ -352,6 +350,8 @@ class Retriever:
             "top_uuids": [u.get("uuid", "") for u in top_units],
             "top_kp_ids": [u.get("kp_id", "") for u in top_units],
             "context_uuids": context_uuids,
+            # 引用映射：ref_id → {uuid, kp_path, page_ref}，取代"按 context_uuids 顺序推断"的脆弱方案
+            "citation_map": citation_map,
             "candidate_count": len(candidates),
         }
 
@@ -396,7 +396,7 @@ def _dense_rank(
         scored.append((u, sim))
 
     scored.sort(key=lambda x: x[1], reverse=True)
-    print(f"[dense_rank] {len(units)} unit 编码+排序, 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+    logger.debug("[dense_rank] %d unit 编码+排序, 耗时=%.0fms", len(units), (_time.monotonic() - t0) * 1000)
     return [u for u, _ in scored[:top_k]]
 
 
@@ -429,19 +429,21 @@ async def _kp_expand(
     reranker=None,
     encoder=None,
     query_dense: list[float] | None = None,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], dict]:
     """KP 扩展 + 语义粗排 + cross-encoder 精排
 
     支持两种模式（由 config.kp_expand_mode 控制）：
     - "full"（默认）: 拉取 top KP 下的全部 unit
     - "neighbor": 只取命中 unit 前后各 N 个相邻 unit（N = config.kp_neighbor_window）
-    返回 (context_string, context_uuids)
+    返回 (context_string, context_uuids, citation_map)
+      - citation_map: {ref_id(str): {uuid, kp_path, page_ref}}，与 <source id="N"> 一一对应，
+        用于校验回答中 <ref id="N" /> 的真实教材来源
     """
     from uuid import UUID
 
     kp_ids = [u["kp_id"] for u in top_units if u.get("kp_id")]
     if not kp_ids:
-        return "", []
+        return "", [], {}
 
     kp_order = {kp_id: i for i, kp_id in enumerate(kp_ids)}
 
@@ -489,7 +491,7 @@ async def _kp_expand(
                 KnowledgeUnit.kp_id, KnowledgeUnit.seq_order
             )
         else:
-            return "", []
+            return "", [], {}
     else:
         # Full mode：拉取 KP 下全部 unit
         stmt = base_select.where(
@@ -500,7 +502,7 @@ async def _kp_expand(
     rows = result.all()
 
     if not rows:
-        return "", []
+        return "", [], {}
 
     all_units: list[dict] = []
     for row in rows:
@@ -529,21 +531,24 @@ async def _kp_expand(
     reranker_ok = reranker is not None and reranker.available
     if query and reranker_ok and len(other_units) > N_COARSE:
         import time as _time
-        print(f"[kp_expand] 两阶段过滤: 非top_unit={len(other_units)} → 粗排top-{N_COARSE} → 精排")
+        logger.debug(
+            "[kp_expand] 两阶段过滤: 非top_unit=%d → 粗排top-%d → 精排",
+            len(other_units), N_COARSE,
+        )
         if encoder is not None and query_dense is not None:
             coarse = _dense_rank(query_dense, other_units, encoder, top_k=N_COARSE)
         else:
             t0 = _time.monotonic()
             coarse = _fast_rank(query, other_units, top_k=N_COARSE)
-            print(f"[kp_expand] 关键词粗排完成, 耗时={(_time.monotonic()-t0)*1000:.0f}ms")
+            logger.debug("[kp_expand] 关键词粗排完成, 耗时=%.0fms", (_time.monotonic() - t0) * 1000)
         try:
             t1 = _time.monotonic()
             other_units = reranker.rerank(query, coarse, top_k=len(coarse))
-            print(f"[kp_expand] 精排完成, 耗时={(_time.monotonic()-t1)*1000:.0f}ms")
+            logger.debug("[kp_expand] 精排完成, 耗时=%.0fms", (_time.monotonic() - t1) * 1000)
         except Exception:
             other_units = coarse
     elif query and reranker_ok and len(other_units) > 10:
-        print(f"[kp_expand] 全量精排(非top_unit), unit数={len(other_units)}")
+        logger.debug("[kp_expand] 全量精排(非top_unit), unit数=%d", len(other_units))
         try:
             other_units = reranker.rerank(
                 query, other_units, top_k=len(other_units)
@@ -567,6 +572,7 @@ async def _kp_expand(
 
     parts: list[str] = []
     context_uuids: list[str] = []
+    citation_map: dict[str, dict] = {}
     total_chars = 0
     ref_id = 0
 
@@ -583,6 +589,11 @@ async def _kp_expand(
         block = f"{source_header}{body}{footer}"
         parts.append(block)
         context_uuids.append(u["uuid"])
+        citation_map[str(ref_id)] = {
+            "uuid": u["uuid"],
+            "kp_path": u.get("kp_path", ""),
+            "page_ref": u["page_ref"],
+        }
         total_chars += len(block)
 
     # 第二遍：逐 KP 路径补全其他 unit（受 max_chars 限制）
@@ -609,21 +620,27 @@ async def _kp_expand(
             block = f"{source_header}{body}{footer}"
             parts.append(block)
             context_uuids.append(u["uuid"])
+            citation_map[str(ref_id)] = {
+                "uuid": u["uuid"],
+                "kp_path": kp_path,
+                "page_ref": u["page_ref"],
+            }
             total_chars += len(block)
 
-    return "\n".join(parts), context_uuids
+    return "\n".join(parts), context_uuids, citation_map
 
 
 def _format_units(
     top_units: list[dict],
     max_chars: int = 8000,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], dict]:
     """不使用 KP 扩展时，直接用检索到的 unit 原文组装上下文。
-    返回 (context_string, context_uuids)
+    返回 (context_string, context_uuids, citation_map)
     """
     parts: list[str] = []
     total_chars = 0
     context_uuids: list[str] = []
+    citation_map: dict[str, dict] = {}
 
     for i, u in enumerate(top_units):
         header = (
@@ -636,9 +653,14 @@ def _format_units(
         if remaining <= 0:
             break
         context_uuids.append(u.get("uuid", ""))
+        citation_map[str(i + 1)] = {
+            "uuid": u.get("uuid", ""),
+            "kp_path": u.get("kp_path", ""),
+            "page_ref": u.get("page_ref", ""),
+        }
         content = u["content"][:remaining]
         block = header + content + footer
         parts.append(block)
         total_chars += len(block)
 
-    return "\n".join(parts), context_uuids
+    return "\n".join(parts), context_uuids, citation_map

@@ -58,7 +58,6 @@ THRESHOLDS = {
 GRID_SEARCH_PLAN = {
     1: {"rrf_k": [20, 40, 60, 100], "dense_weight": [0.3, 0.5, 0.7]},
     2: {"rerank_top_k": [3, 5, 8, 10], "context_max_chars": [4000, 6000, 8000, 10000]},
-    3: {"level_penalty": [0.0, 0.1, 0.2]},
 }
 
 # RAG 全部参数默认值（与 RAGConfig 对齐）
@@ -82,7 +81,6 @@ ALL_PARAM_DEFAULTS = {
     "rrf_k": 60,
     "dense_weight": 0.5,
     "rerank_top_k": 5,
-    "level_penalty": 0.0,
     # BM25 参数
     "bm25_top_k": 20,
     "bm25_cache_ttl": 600,

@@ -8,10 +8,9 @@ RAGAS 评估 CLI —— 基线评估 + 参数网格搜索 + 报告输出
     # 仅评估检索质量（跳过 LLM 生成，更快）
     PYTHONPATH=src .venv/Scripts/python -m eval.eval_ragas baseline --skip-generation
 
-    # 三轮网格搜索（参考 docs/rag/RAG评估体系构建.md 5.2）
+    # 两轮网格搜索（参考 docs/rag/RAG评估体系构建.md 5.2）
     PYTHONPATH=src .venv/Scripts/python -m eval.eval_ragas grid --stage 1   # rrf_k × dense_weight
     PYTHONPATH=src .venv/Scripts/python -m eval.eval_ragas grid --stage 2   # rerank_top_k × context_max_chars
-    PYTHONPATH=src .venv/Scripts/python -m eval.eval_ragas grid --stage 3   # level_penalty
 
     # 自定义网格搜索
     PYTHONPATH=src .venv/Scripts/python -m eval.eval_ragas grid --params '{"rrf_k":[30,60,90]}'
@@ -280,7 +279,6 @@ def main():
   %(prog)s baseline --skip-generation  仅评估检索（跳过生成）
   %(prog)s grid --stage 1              第一轮网格搜索（rrf_k × dense_weight）
   %(prog)s grid --stage 2              第二轮网格搜索（rerank_top_k × context_max_chars）
-  %(prog)s grid --stage 3              第三轮网格搜索（level_penalty）
   %(prog)s grid --params '{"rrf_k":[30,60]}'  自定义网格
   %(prog)s compare r1.json r2.json     对比两次报告
         """,
@@ -300,8 +298,8 @@ def main():
     p_grid.add_argument(
         "--stage",
         type=int,
-        choices=[1, 2, 3],
-        help="预设搜索阶段: 1=rrf_k×dense_weight, 2=rerank_top_k×context_max_chars, 3=level_penalty",
+        choices=[1, 2],
+        help="预设搜索阶段: 1=rrf_k×dense_weight, 2=rerank_top_k×context_max_chars",
     )
     p_grid.add_argument(
         "--params",

@@ -70,6 +70,11 @@ class AskResponse(BaseModel):
     citations: list[int] = Field(description="引用的页面索引列表")
     top_scores: list[float] = Field(description="相似度得分列表")
     source_kp_paths: list[str] = Field(description="知识点路径列表")
+    citation_map: dict[str, dict] = Field(
+        default_factory=dict,
+        description='引用 id → 真实来源映射 {ref_id: {"uuid", "kp_path", "page_ref"}}，'
+                    "与回答中 <ref id=\"N\" /> 一一对应，供前端校验引用真实性（不依赖列表顺序推断）",
+    )
 
 
 # 课程 CRUD
@@ -414,6 +419,7 @@ async def ask_course(
         citations=citations,
         top_scores=metadata["top_rerank_scores"],
         source_kp_paths=metadata["source_kp_paths"],
+        citation_map=metadata.get("citation_map", {}),
     )
 
 
