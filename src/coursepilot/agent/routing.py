@@ -1,9 +1,8 @@
 """条件路由函数（Phase 2 启用）。
 
-提供 5 个路由函数供 graph.py 的条件边使用：
-  - route_by_intent: classify 后分发（P1 增强：按复杂度路由）
-  - route_after_check: check_sufficiency 后分发（P1 新增）
-  - route_after_rag: query_rag / synthesize 后分发
+提供 4 个路由函数供 graph.py 的条件边使用：
+  - route_by_intent: classify 后分发（P1 增强：complex question → agentic_rag）
+  - route_after_rag: query_rag / agentic_rag 后分发
   - route_after_evaluate: evaluate_quiz 后分发（含重试逻辑）
   - route_after_review: human_review 后分发
 """
@@ -17,14 +16,14 @@ logger = logging.getLogger(__name__)
 def route_by_intent(state: dict) -> str:
     """classify 节点后根据 intent + complexity 路由
 
-    P2 增强：复杂问题先分解（decompose → 并行检索 → 质检），
+    P1：复杂问题（complex question）走 Agentic RAG 节点（LLM 自主决策），
     简单问题走快速通道（query_rag）。
 
     Returns:
         "human_review" — 需要审批的路径
         "get_mastery"  — practice / review（需要掌握度）
         "diagnose"     — diagnose
-        "decompose"    — complex question（先分解再检索）
+        "agentic_rag"  — complex question（LLM 自主 ReAct 循环）
         "query_rag"    — simple question（快速通道）
     """
     intent = state.get("intent", "")
@@ -36,7 +35,7 @@ def route_by_intent(state: dict) -> str:
         return "diagnose"          # 诊断只读，无需审批
     elif intent == "question":
         if complexity == "complex" and rag_config.enable_routing:
-            return "decompose"      # 复杂 → 先分解再检索
+            return "agentic_rag"   # 复杂 → LLM 自主决策
         return "query_rag"         # 简单 → 快速通道
     return "query_rag"
 
@@ -52,7 +51,7 @@ def route_after_review(state: dict) -> str:
 
 
 def route_after_rag(state: dict) -> str:
-    """query_rag / synthesize 节点后判断是否继续出题
+    """query_rag / agentic_rag 节点后判断是否继续出题
 
     Return:
         "generate_quiz" — practice / review（需要生成练习题）
@@ -60,41 +59,6 @@ def route_after_rag(state: dict) -> str:
     """
     intent = state.get("intent", "question")
     return "generate_quiz" if intent in ("practice", "review") else "finalize"
-
-
-def route_after_check(state: dict) -> str:
-    """check_sufficiency 节点后判断：补搜 / 网络搜索 / 生成
-
-    P3 新增：最后一次补搜改为网络搜索，教材覆盖不到时走备用知识源。
-
-    逻辑：
-    - 质检通过 → "synthesize"
-    - 不足 且 retry < max_rounds-1 → "retrieve"（RAG 补搜）
-    - 不足 且 retry == max_rounds-1 → "web_search"（最后一轮：网络搜索）
-    - 不足 且 retry >= max_rounds → "synthesize"（强制生成）
-
-    Returns:
-        "retrieve"    — 回到 retrieve_node 继续 RAG 补搜
-        "web_search"  — 走 web_search_node 尝试网络搜索
-        "synthesize"  — 进入 synthesize_node 生成答案
-    """
-    sufficiency = state.get("sufficiency", {})
-    retry_count = state.get("retrieval_retry_count", 0)
-    max_rounds = rag_config.complex_max_rounds
-
-    if sufficiency.get("sufficient", True):
-        return "synthesize"
-
-    if retry_count < max_rounds - 1:
-        logger.debug("质检不足 (retry=%d/%d)，RAG 补搜", retry_count, max_rounds)
-        return "retrieve"
-
-    if retry_count < max_rounds:
-        logger.debug("质检不足 (retry=%d/%d)，最后一次尝试网络搜索", retry_count, max_rounds)
-        return "web_search"
-
-    logger.debug("已达最大补搜轮数 %d，强制生成", max_rounds)
-    return "synthesize"
 
 
 def route_after_evaluate(state: dict) -> str:

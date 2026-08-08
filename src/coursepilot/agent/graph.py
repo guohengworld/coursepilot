@@ -1,6 +1,6 @@
 """LangGraph 状态机构建
 
-P3 拓扑（含查询分解 + 质检循环 + 网络搜索兜底 + 降级生成）：
+P1 拓扑（复杂问题走 Agentic RAG，CRAG 补搜循环已删除）：
     START → build_context → classify → [route_by_intent]
       ├─ query_rag → [route_after_rag] → finalize → END
       │   └─ (practice/review) → generate_quiz → evaluate_quiz
@@ -8,10 +8,7 @@ P3 拓扑（含查询分解 + 质检循环 + 网络搜索兜底 + 降级生成�
       │            FAIL+retry<2 → generate_quiz (重试)
       │            PASS+practice → create_plan → finalize
       │            PASS+review → review_plan → finalize
-      ├─ decompose → retrieve → check_sufficiency → [route_after_check]
-      │   ├─ "synthesize" → [route_after_rag] → (同上)
-      │   ├─ "retrieve" → retrieve (RAG补搜, ≤max_rounds-2 轮)
-      │   └─ "web_search" → web_search → check_sufficiency (最后一轮)
+      ├─ agentic_rag → [route_after_rag] → (同上)   # complex question：LLM 自主 ReAct 循环
       ├─ get_mastery → query_rag → (同上)
       └─ diagnose → finalize → END
 """
@@ -24,10 +21,8 @@ from psycopg.rows import dict_row
 
 from coursepilot.agent.nodes import (
     build_context_node,
-    check_sufficiency_node,
     classify_node,
     create_plan_node,
-    decompose_query_node,
     diagnose_node,
     evaluate_quiz_node,
     finalize_node,
@@ -35,13 +30,10 @@ from coursepilot.agent.nodes import (
     get_mastery_node,
     human_review_node,
     query_rag_node,
-    retrieve_node,
     review_plan_node,
-    synthesize_node,
-    web_search_node,
 )
+from coursepilot.agent.rag_agent import agentic_rag_node
 from coursepilot.agent.routing import (
-    route_after_check,
     route_after_evaluate,
     route_after_rag,
     route_after_review,
@@ -94,14 +86,8 @@ async def build_agent_graph():
     builder.add_node("review_plan", review_plan_node)
     builder.add_node("finalize", finalize_node)
     builder.add_node("human_review", human_review_node)
-    # P1: Agentic RAG 质检循环
-    builder.add_node("retrieve", retrieve_node)
-    builder.add_node("check_sufficiency", check_sufficiency_node)
-    builder.add_node("synthesize", synthesize_node)
-    # P2: 查询分解
-    builder.add_node("decompose", decompose_query_node)
-    # P3: 网络搜索（教材覆盖不到的备用知识源）
-    builder.add_node("web_search", web_search_node)
+    # P1: Agentic RAG 节点（complex question：LLM 自主决策的 ReAct 循环）
+    builder.add_node("agentic_rag", agentic_rag_node)
 
     builder.add_edge(START, "build_context")
     builder.add_edge("build_context", "classify")
@@ -109,14 +95,11 @@ async def build_agent_graph():
     # 条件边: classify → intent + complexity 分发
     builder.add_conditional_edges("classify", route_by_intent, {
         "query_rag": "query_rag",
-        "decompose": "decompose",
+        "agentic_rag": "agentic_rag",
         "get_mastery": "get_mastery",
         "diagnose": "diagnose",
         "human_review": "human_review",
     })
-
-    # P2: decompose → retrieve（固定边）
-    builder.add_edge("decompose", "retrieve")
 
     # human_review 批准后继续
     builder.add_conditional_edges("human_review", route_after_review, {
@@ -133,25 +116,8 @@ async def build_agent_graph():
         "finalize": "finalize",
     })
 
-    # P1: 质检循环
-    # retrieve → check_sufficiency（固定边）
-    builder.add_edge("retrieve", "check_sufficiency")
-
-    # check_sufficiency → 质检结果路由
-    # 不足 + 预留给 RAG → retrieve
-    # 不足 + 最后一轮 → web_search
-    # 充足或耗尽 → synthesize
-    builder.add_conditional_edges("check_sufficiency", route_after_check, {
-        "retrieve": "retrieve",
-        "web_search": "web_search",
-        "synthesize": "synthesize",
-    })
-
-    # P3: web_search → 回到 check_sufficiency 继续质检
-    builder.add_edge("web_search", "check_sufficiency")
-
-    # synthesize → 同 query_rag 一样，按 intent 决定是否继续出题
-    builder.add_conditional_edges("synthesize", route_after_rag, {
+    # agentic_rag → 与 query_rag 一致：按 intent 决定是否继续出题
+    builder.add_conditional_edges("agentic_rag", route_after_rag, {
         "generate_quiz": "generate_quiz",
         "finalize": "finalize",
     })

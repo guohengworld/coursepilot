@@ -71,6 +71,59 @@ class TestQuestionWorkflow:
         mock_cls.assert_called_once()
         mock_qr.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_complex_question_path_uses_agentic_rag(self, raw_session, std_data, real_asf):
+        """complex question 走 agentic_rag 节点（P1：CRAG 已删，LLM 自主 ReAct）"""
+        uid, cid = std_data["user_id"], std_data["course_id"]
+
+        mock_answer = {
+            "answer": "进程与线程的调度异同需要结合教材对比分析。",
+            "context": "<source id=\"1\">进程调度</source>",
+            "sources": [{"kp_path": "OS/进程管理"}],
+            "retrieved_metadata": {
+                "source_kp_paths": ["OS/进程管理"],
+                "top_uuids": [uuid.uuid4()],
+            },
+            "degraded_mode": False,
+            "llm_calls": [{"node": "agent_step", **ZERO_TOKENS}],
+            "agent_steps": [{"tool": "search_textbook", "args": "{\"query\": \"进程调度\"}"}],
+            "tool_history": [{"tool": "search_textbook", "args": {}, "result_summary": "<source id=\"1\">"[:200]}],
+            "evidence": ["<source id=\"1\">进程调度</source>"],
+            "error": None,
+        }
+
+        with (
+            patch("coursepilot.agent.nodes.async_session_factory", real_asf),
+            patch("coursepilot.agent.nodes.classify_intent",
+                  return_value=("question", "complex", ZERO_TOKENS)) as mock_cls,
+            patch("coursepilot.agent.graph.agentic_rag_node",
+                  return_value=mock_answer) as mock_agentic,
+            patch("coursepilot.agent.nodes.update_profile", new=AsyncMock()),
+        ):
+            from coursepilot.agent.graph import build_agent_graph
+            from langgraph.checkpoint.memory import MemorySaver
+            with patch("coursepilot.agent.graph._get_saver", return_value=MemorySaver()):
+                graph = await build_agent_graph()
+
+            state = {
+                "query": "比较进程调度与线程调度的异同？",
+                "course_id": str(cid),
+                "user_id": str(uid),
+                "session_id": str(uuid.uuid4()),
+                "messages": [], "course_context": {}, "user_profile": None,
+                "recent_qa": [], "intent": "", "context": "",
+                "retrieved_metadata": {}, "answer": "", "sources": [],
+                "token_count": 0, "llm_calls": [], "error": None,
+            }
+            result = await graph.ainvoke(state, {"configurable": {"thread_id": str(uuid.uuid4())}})
+
+        assert result["intent"] == "question"
+        assert result["complexity"] == "complex"
+        assert "调度异同" in result["answer"]
+        assert len(result["sources"]) > 0
+        mock_cls.assert_called_once()
+        mock_agentic.assert_called_once()
+
 class TestDiagnoseWorkflow:
     """diagnose 路径：build_context → classify → diagnose → finalize"""
 

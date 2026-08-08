@@ -109,7 +109,7 @@ class TestGraphStructure:
 
     @pytest.mark.asyncio
     async def test_graph_has_ten_nodes(self):
-        """build_agent_graph() 注册了 11 个自定义节点（Phase 1: 4 + Phase 2: 6 + Phase 3: 1）"""
+        """build_agent_graph() 注册 12 个自定义节点（P1: CRAG 节点已删，agentic_rag 替换）"""
         from langgraph.checkpoint.memory import MemorySaver
 
         with patch("coursepilot.agent.graph._get_saver", return_value=MemorySaver()):
@@ -117,8 +117,12 @@ class TestGraphStructure:
             graph = await build_agent_graph()
 
         custom_nodes = {n for n in graph.nodes if not n.startswith("__")}
-        assert len(custom_nodes) == 11
+        assert len(custom_nodes) == 12
         assert "human_review" in custom_nodes
+        assert "agentic_rag" in custom_nodes
+        # P1: CRAG 节点已删除
+        for removed in ("retrieve", "check_sufficiency", "synthesize", "decompose", "web_search"):
+            assert removed not in custom_nodes
 
     def test_graph_linear_edges_in_builder(self):
         """检查 builder 注册了正确的边"""
@@ -168,7 +172,7 @@ class TestGraphStructure:
         assert isinstance(saver, AsyncPostgresSaver)
 
     def test_route_by_intent_routes_properly(self):
-        """根据 intent 路由（practice/review 需人工审批）"""
+        """根据 intent 路由（practice/review 需人工审批；complex question → agentic_rag）"""
         from coursepilot.agent.routing import route_by_intent
         assert route_by_intent({"intent": "question"}) == "query_rag"
         assert route_by_intent({"intent": "practice"}) == "human_review"
@@ -176,6 +180,9 @@ class TestGraphStructure:
         assert route_by_intent({"intent": "diagnose"}) == "diagnose"
         assert route_by_intent({"intent": "unknown"}) == "query_rag"
         assert route_by_intent({}) == "query_rag"
+        # P1: complex question 走 Agentic RAG
+        assert route_by_intent({"intent": "question", "complexity": "complex"}) == "agentic_rag"
+        assert route_by_intent({"intent": "question", "complexity": "simple"}) == "query_rag"
 
 
 # ═══════════════════════════════════════════════════════════════

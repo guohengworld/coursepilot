@@ -18,7 +18,7 @@ from dataclasses import dataclass
 class RAGConfig:
     """RAG 检索与生成管线的全部可调参数。
 
-    共 26 项，按功能分为 6 类：
+    共 25 项，按功能分为 6 类：
     功能开关、智能路由、阈值、检索参数、BM25 参数、编码参数。
     """
 
@@ -28,7 +28,6 @@ class RAGConfig:
     enable_bm25: bool = True          # BM25 检索：True→额外走 BM25 关键词检索；False→只用 Milvus
     enable_rerank: bool = True        # 重排序：True→cross-encoder 精排；False→RRF score 直接排序
     enable_kp_expand: bool = True     # KP 扩展：True→拉取同 KP 全部 unit 丰富上下文；False→仅用命中 unit
-    enable_agentic_rag: bool = False  # Agentic RAG 开关：True→复杂问题走 LLM 自主 ReAct 循环；False→沿用 CRAG 补搜路径（回滚开关）
 
     # ── 智能路由 ────────────────────────────────────────────────
     enable_routing: bool = True       # 智能路由：True→按复杂度走快慢通道；False→一律走全量流程

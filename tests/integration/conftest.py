@@ -55,10 +55,25 @@ async def seed_std(session):
 
 @pytest_asyncio.fixture
 async def db_engine():
-    """function-scoped: 测试数据库引擎 + 建表"""
+    """function-scoped: 测试数据库引擎 + 建表 + 清空数据
+
+    setup 时 TRUNCATE 全部业务表，保证每个测试都从干净状态开始，
+    不受上一次运行残留数据影响（否则首个 seed 会撞唯一约束）。
+    """
+    from sqlalchemy import text as _text
+
     engine = create_async_engine(TEST_DB_URL, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # 清空所有业务表（排除 alembic_version），避免跨测试残留
+        r = await conn.execute(_text(
+            "SELECT tablename FROM pg_tables WHERE schemaname='public' "
+            "AND tablename <> 'alembic_version';"
+        ))
+        tables = [row[0] for row in r.fetchall()]
+        if tables:
+            quoted = ", ".join(f'"{t}"' for t in tables)
+            await conn.execute(_text(f"TRUNCATE TABLE {quoted} CASCADE;"))
     yield engine
     await engine.dispose()
 

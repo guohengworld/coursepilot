@@ -899,7 +899,7 @@ class TestPhase2Graph:
 
     @pytest.mark.asyncio
     async def test_graph_has_nine_nodes(self):
-        """build_agent_graph() 注册了 9 个自定义节点"""
+        """build_agent_graph() 注册 12 个自定义节点（P1: CRAG 节点删除，agentic_rag 新增）"""
         from langgraph.checkpoint.memory import MemorySaver
         with patch("coursepilot.agent.graph._get_saver", return_value=MemorySaver()):
             from coursepilot.agent.graph import build_agent_graph
@@ -913,6 +913,8 @@ class TestPhase2Graph:
         }
         # Phase 3 增加了 human_review 节点
         expected.add("human_review")
+        # P1: 增加 agentic_rag 节点（CRAG 节点已删除）
+        expected.add("agentic_rag")
         assert custom_nodes == expected, f"缺失节点: {expected - custom_nodes}"
 
     def test_conditional_edges_in_routing_module(self):

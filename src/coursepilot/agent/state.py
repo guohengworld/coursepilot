@@ -40,14 +40,8 @@ class AgentState(TypedDict):
     # 控制字段
     error: str | None           # 节点执行错误信息
 
-    # P1: Agentic RAG 质检与多轮检索
-    retrieval_retry_count: int  # 当前补搜轮数（0~complex_max_rounds）
-    sufficiency: dict | None    # check_sufficiency 输出:
-                                #   {"sufficient": bool, "missing_info": str, ...}
-
-    # P2: 查询分解与降级生成
-    sub_queries: list[dict]     # decompose 输出: [{"id":1,"query":"...","target_concept":"..."}]
-    degraded_mode: bool         # True=质检全失败，降级生成（含免责声明）
+    # P2: 降级生成（Agentic RAG guardrail 强制停止时由 finalize_answer 置 True）
+    degraded_mode: bool         # True=guardrail 触发，降级生成（含免责声明）
 
     # 掌握度
     mastery: dict               # get_mastery 输出: {"mastery_level": {...}, "weak_kps": [...]}

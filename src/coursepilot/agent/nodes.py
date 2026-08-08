@@ -11,9 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.agent.context import build_context as build_context_logic
 from coursepilot.agent.profile_updater import update_profile
-from coursepilot.agent.skills.check_sufficiency import check_sufficiency
 from coursepilot.agent.skills.classify_intent import classify_intent
-from coursepilot.agent.skills.decompose_query import decompose_query
 from coursepilot.agent.skills.diagnose import diagnose, generate_llm_analysis
 from coursepilot.agent.skills.evaluate_quiz import evaluate_quiz
 from coursepilot.agent.skills.generate_quiz import generate_quiz
@@ -21,7 +19,6 @@ from coursepilot.agent.skills.get_mastery import get_mastery
 from coursepilot.agent.skills.query_rag import query_rag
 from coursepilot.agent.skills.review_plan import review_plan
 from coursepilot.agent.skills.update_qa_record import update_qa_record
-from coursepilot.agent.skills.web_search import format_web_context, web_search
 from coursepilot.db import async_session_factory
 from coursepilot.models import AgentSession, User
 from coursepilot.rag.config import config as rag_config
@@ -131,236 +128,6 @@ async def query_rag_node(state: dict) -> dict:
             rag_config.rerank_top_k = saved_rerank_top_k
 
 
-async def decompose_query_node(state: dict) -> dict:
-    """复杂查询分解：将多跳问题拆为子问题，供并行检索。"""
-    try:
-        result = await decompose_query(
-            query=state["query"],
-            course_context=state.get("course_context", {}),
-        )
-        sub_queries = result.get("sub_queries", [])
-        dtype = result.get("decomposition_type", "single")
-
-        if sub_queries:
-            logger.info("查询分解 (%s): %d 个子问题", dtype, len(sub_queries))
-            for sq in sub_queries:
-                tc = sq.get("target_concept", "")
-                logger.info("  子问题[%d]: %s (→ %s)", sq["id"], sq["query"], tc)
-
-        return {
-            "sub_queries": sub_queries,
-            "error": None,
-        }
-    except Exception as e:
-        logger.exception("decompose_query_node 异常")
-        return {"sub_queries": [], "error": str(e)}
-
-
-async def web_search_node(state: dict) -> dict:
-    """网络搜索节点：教材检索不足时，最后一次尝试改用网络搜索（P3）。
-
-    1. 从 sufficiency 质检结果中取 missing_info + 用户原问题 拼搜索词
-    2. 搜索 DuckDuckGo，格式化结果追加到现有 context 前
-    3. 结果继续走 check_sufficiency 质检
-    """
-    try:
-        query = state["query"]
-        sufficiency = state.get("sufficiency", {})
-        missing_info = sufficiency.get("missing_info", "")
-
-        # 拼搜索词
-        search_query = query
-        if missing_info:
-            search_query = f"{missing_info} {query}"
-
-        results = await web_search(search_query, top_k=5)
-        if not results:
-            logger.info("web_search 无结果，跳过")
-            return {"error": None}  # 无搜索结果，但不上报错误
-
-        web_context = format_web_context(results, query)
-
-        # 追加到现有 context 之前
-        existing_context = state.get("context", "")
-        if existing_context:
-            new_context = web_context + "\n\n" + existing_context
-        else:
-            new_context = web_context
-
-        logger.info("web_search: 结果追加到 context (+%d chars)", len(web_context))
-
-        return {
-            "context": new_context,
-            "error": None,
-        }
-    except Exception as e:
-        logger.exception("web_search_node 异常")
-        return {"error": str(e)}
-
-
-async def retrieve_node(state: dict) -> dict:
-    """RAG 检索（支持并行子问题检索 P2）。
-
-    如果 state 中存在 sub_queries，并行检索每个子问题后合并结果；
-    否则退化为单查询检索。
-    """
-    try:
-        from coursepilot.rag.retriever import Retriever
-
-        sub_queries = state.get("sub_queries", [])
-        retriever = Retriever()
-        async with async_session_factory() as session:
-            if sub_queries:
-                # P2: 并行检索多个子问题
-                import asyncio
-
-                async def _retrieve_one(sq: dict) -> tuple[str, dict]:
-                    ctx, meta = await retriever.retrieve(
-                        session, sq["query"], state["course_id"],
-                    )
-                    return ctx, meta
-
-                tasks = [_retrieve_one(sq) for sq in sub_queries]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                contexts = []
-                merged_metadata = {}
-                all_kp_paths = []
-                all_top_uuids = []
-                for i, r in enumerate(results):
-                    if isinstance(r, Exception):
-                        logger.warning("子问题[%d] 检索失败: %s", i + 1, r)
-                        continue
-                    ctx, meta = r
-                    contexts.append(ctx)
-                    all_kp_paths.extend(meta.get("source_kp_paths", []))
-                    all_top_uuids.extend(meta.get("top_uuids", []))
-
-                context = "\n---\n".join(contexts) if contexts else ""
-                merged_metadata = {
-                    "source_kp_paths": all_kp_paths,
-                    "top_uuids": all_top_uuids,
-                    "parallel_count": len(sub_queries),
-                }
-            else:
-                # 单查询检索（含 P1 补搜重试）
-                context, merged_metadata = await retriever.retrieve(
-                    session, state["query"], state["course_id"],
-                )
-
-        source_kp_paths = merged_metadata.get("source_kp_paths", [])
-        sources = [{"kp_path": p} for p in source_kp_paths]
-
-        retry_count = state.get("retrieval_retry_count", 0)
-        logger.info("检索完成 (第%d轮): context=%d chars, sources=%d",
-                    retry_count + 1, len(context), len(sources))
-
-        return {
-            "context": context,
-            "retrieved_metadata": merged_metadata,
-            "sources": sources,
-            "error": None,
-        }
-    except Exception as e:
-        logger.exception("retrieve_node 异常")
-        return {"context": "", "retrieved_metadata": {}, "sources": [], "error": str(e)}
-
-
-async def check_sufficiency_node(state: dict) -> dict:
-    """质检：判断检索到的教材内容是否足够回答用户问题。
-
-    不足时递增 retrieval_retry_count 触发补搜循环。
-    """
-    try:
-        query = state["query"]
-        context = state.get("context", "")
-        metadata = state.get("retrieved_metadata", {})
-        kp_paths = metadata.get("source_kp_paths", [])
-        retry_count = state.get("retrieval_retry_count", 0)
-        max_rounds = rag_config.complex_max_rounds
-
-        result = await check_sufficiency(
-            query=query, context=context, kp_paths=kp_paths,
-        )
-
-        sufficient = result.get("sufficient", True)
-        confidence = result.get("confidence", 0.0)
-
-        if not sufficient and retry_count < max_rounds:
-            # 需要补搜
-            new_retry = retry_count + 1
-            degraded = False
-            logger.info("质检不足 (第%d轮/%d轮): confidence=%.2f, missing=%s",
-                        new_retry, max_rounds, confidence, result.get("missing_info", ""))
-        else:
-            new_retry = retry_count  # 充足或已达上限，不再递增
-            degraded = not sufficient  # 达上限仍不足 → 降级
-            if degraded:
-                logger.warning("质检不足但已达最大轮数 %d，开启降级生成", max_rounds)
-
-        return {
-            "sufficiency": result,
-            "retrieval_retry_count": new_retry,
-            "degraded_mode": degraded,
-            "error": None,
-        }
-    except Exception as e:
-        logger.exception("check_sufficiency_node 异常")
-        return {
-            "sufficiency": {"sufficient": True, "confidence": 0.5, "missing_info": ""},
-            "retrieval_retry_count": state.get("retrieval_retry_count", 0),
-            "degraded_mode": False,
-            "error": str(e),
-        }
-
-
-async def synthesize_node(state: dict) -> dict:
-    """根据已有检索结果生成最终答案。
-
-    如果 degraded_mode=True，在生成时追加免责声明
-    （教材内容不足以完整回答，答案仅供参考）。
-    """
-    try:
-        from coursepilot.rag.generator import Generator
-
-        generator = Generator()
-        degraded = state.get("degraded_mode", False)
-
-        # ── 降级模式：在 context 前面加一段说明 ──
-        context = state.get("context", "")
-        if degraded and context:
-            disclaimer = (
-                "[注意] 以下教材内容可能不足以完整回答该问题。"
-                "请结合教材原文和课堂笔记使用，以下回答仅供参考。\n"
-            )
-            context = disclaimer + context
-
-        answer, token_info = await generator.generate(
-            query=state["query"],
-            context=context,
-            course_context=state.get("course_context", {}),
-            conversation=state.get("conversation"),
-            rolling_summary=state.get("rolling_summary", ""),
-            user_profile=state.get("user_profile"),
-        )
-
-        token_info["routing_complexity"] = "complex"
-        token_info["degraded_mode"] = degraded
-        llm_calls = list(state.get("llm_calls", []))
-        llm_calls.append({"node": "synthesize", **token_info})
-
-        return {
-            "answer": answer,
-            "llm_calls": llm_calls,
-            "error": None,
-        }
-    except Exception as e:
-        logger.exception("synthesize_node 异常")
-        return {
-            "answer": f"抱歉，生成答案时出错了：{e}",
-            "error": str(e),
-        }
-
 async def finalize_node(state: dict) -> dict:
     """持久化 + 会话更新 + 滚动摘要 + 异步触发 profile_updater
 
@@ -390,7 +157,11 @@ async def finalize_node(state: dict) -> dict:
 
         async with async_session_factory() as session:
             # ── Step B: Audit 日志（独立 session 但复用同一个也可） ──
-            from coursepilot.governance.audit import log_agent_chat, log_guardrail_violation
+            from coursepilot.governance.audit import (
+                log_action,
+                log_agent_chat,
+                log_guardrail_violation,
+            )
 
             # ── Step C: 写入 QA Record（仅在 session_id 有效时） ──
             session_id = state.get("session_id", "")
@@ -424,21 +195,21 @@ async def finalize_node(state: dict) -> dict:
                 )
 
             # 滚动压缩：当 L1 过长时，把老轮次压缩进 rolling_summary
-        compaction_count = state.get("compaction_count", 0)
-        if agent_session:
-            compaction_count += await _maybe_compact_session(state, agent_session)
+            compaction_count = state.get("compaction_count", 0)
+            if agent_session:
+                compaction_count += await _maybe_compact_session(state, agent_session)
 
-        # 记录压缩次数到 llm_calls 便于可观测（P5）
-        if compaction_count > 0:
-            llm_calls.append({
-                "node": "compaction",
-                "compacted_turns": compaction_count,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            })
+            # 记录压缩次数到 llm_calls 便于可观测（P5）
+            if compaction_count > 0:
+                llm_calls.append({
+                    "node": "compaction",
+                    "compacted_turns": compaction_count,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                })
 
-        # ── Step E: 保存学情诊断报告 ──
+            # ── Step E: 保存学情诊断报告 ──
             diagnosis = state.get("diagnosis")
             if diagnosis and diagnosis.get("total_practiced", 0) > 0:
                 from coursepilot.models import DiagnosisReport
@@ -466,6 +237,20 @@ async def finalize_node(state: dict) -> dict:
             intent=state.get("intent", ""),
             query=state.get("query", ""),
         ))
+        # P1: Agentic RAG 决策轨迹写入审计日志（agent_steps 非空时）
+        agent_steps = state.get("agent_steps") or []
+        if agent_steps:
+            asyncio.create_task(log_action(
+                user_id=state["user_id"],
+                action="agent.rag_steps",
+                resource_type="agent_session",
+                resource_id=state["session_id"],
+                details={
+                    "step_count": len(agent_steps),
+                    "tools_used": [s.get("tool") for s in agent_steps],
+                    "tool_history": state.get("tool_history") or [],
+                },
+            ))
         if guard_issues:
             asyncio.create_task(log_guardrail_violation(
                 user_id=state["user_id"],

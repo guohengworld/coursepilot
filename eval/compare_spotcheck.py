@@ -116,26 +116,25 @@ async def run_agentic_rag(question: dict) -> dict:
 
         answer = state.get("answer", "")
         context = state.get("context", "")
-        sufficiency = state.get("sufficiency", {})
-        deferred_queries = state.get("sub_queries", [])
-        retry_count = state.get("retrieval_retry_count", 0)
+        agent_steps = state.get("agent_steps") or []
+        tool_history = state.get("tool_history") or []
+        degraded_mode = state.get("degraded_mode", False)
 
         latency = (time.monotonic() - t0) * 1000
 
-        # 统计检索到的 KP 分布
-        has_decompose = len(deferred_queries) > 0
-        has_web_search = "网络搜索" in (context or "")
-        has_degraded = sufficiency.get("degraded_mode", False)
+        # 从决策轨迹统计检索行为（P1 后 CRAG 字段已删除，改用 agent_steps）
+        has_decompose = any(s.get("tool") == "plan" for s in agent_steps)
+        has_web_search = any(s.get("tool") == "web_search" for s in agent_steps)
 
         return {
             "context_len": len(context),
             "answer": answer,
             "decomposed": has_decompose,
-            "sub_queries": deferred_queries,
-            "retries": retry_count,
+            "agent_step_count": len(agent_steps),
             "web_search_used": has_web_search,
-            "degraded_mode": has_degraded,
-            "sufficiency": sufficiency,
+            "degraded_mode": degraded_mode,
+            "agent_steps": agent_steps,
+            "tool_history": tool_history,
             "latency_ms": round(latency),
         }
     except Exception as e:
@@ -184,21 +183,14 @@ async def main():
         print("▶ Agentic RAG:")
         agent = await run_agentic_rag(q)
         if "answer" in agent:
-            print(f"  子查询分解: {agent['decomposed']}")
-            if agent["sub_queries"]:
-                for sq in agent["sub_queries"]:
-                    print(f"    · {sq}")
-            print(f"  补搜次数: {agent['retries']}")
+            print(f"  查询分解(plan 工具): {agent['decomposed']}")
+            print(f"  决策步数: {agent['agent_step_count']}")
+            for s in agent["agent_steps"]:
+                print(f"    · {s.get('tool')}: {s.get('args')}")
             print(f"  网络搜索: {agent['web_search_used']}")
             print(f"  降级模式: {agent['degraded_mode']}")
             print(f"  回答预览: {agent['answer'][:200]}...")
             print(f"  延迟: {agent['latency_ms']}ms")
-
-            # 质检详情
-            suff = agent.get("sufficiency", {})
-            if suff:
-                print(f"  质检结论: {suff.get('conclusion', '?')}")
-                print(f"  置信度: {suff.get('confidence', '?')}")
         else:
             print(f"  ❌ 失败: {agent.get('error', '未知')}")
 
@@ -208,7 +200,7 @@ async def main():
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(
         json.dumps({
-            "config": {"agentic_rag_version": "P0+P1+P2+P3"},
+            "config": {"agentic_rag_version": "P1（主图切换）"},
             "questions": questions,
         }, ensure_ascii=False, indent=2),
         encoding="utf-8",
