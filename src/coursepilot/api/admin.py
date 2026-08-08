@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coursepilot.agent.memory import recall_memory_turns
 from coursepilot.api.deps import get_current_user, require_superuser
 from coursepilot.db import get_session
-from coursepilot.models import AgentSession, QARecord, User, UserProfile
+from coursepilot.models import AgentSession, AuditLog, QARecord, User, UserProfile
 from coursepilot.observability.metrics import (
     get_context_metrics,
     get_course_stats,
@@ -46,6 +46,7 @@ class SessionMemoryResponse(BaseModel):
     conversation: list[dict] | None
     rolling_summary: str | None
     memory_facts: dict | None
+    agent_steps: dict | None = None  # P3.1: Agentic RAG 决策轨迹（来自审计日志）
 
 
 class MemoryRecallResponse(BaseModel):
@@ -105,6 +106,18 @@ async def session_memory_detail(
 
     context_metrics = await get_context_metrics(session_id)
 
+    # P3.1: 读取该会话最新的 Agentic RAG 决策轨迹（审计日志 agent.rag_steps）
+    audit_result = await session.execute(
+        select(AuditLog)
+        .where(
+            AuditLog.action == "agent.rag_steps",
+            AuditLog.resource_id == session_id,
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(1)
+    )
+    agent_steps_log = audit_result.scalar_one_or_none()
+
     # 查询该用户课程的 L3 记忆
     profile_result = await session.execute(
         select(UserProfile).where(
@@ -124,6 +137,7 @@ async def session_memory_detail(
         conversation=agent_session.conversation,
         rolling_summary=agent_session.rolling_summary,
         memory_facts=profile.memory_facts if profile else None,
+        agent_steps=agent_steps_log.details if agent_steps_log else None,
     )
 
 

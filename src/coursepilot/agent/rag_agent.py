@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -148,14 +149,30 @@ EVALUATE_CONTEXT_TOOL = {
     "type": "function",
     "function": {
         "name": "evaluate_context",
-        "description": "评估当前已收集的证据是否足以回答用户问题。返回各维度评分（覆盖度/完整性/冲突），以及缺失信息清单。当你不确定证据是否足够时调用。",
+        "description": "评估当前已收集的证据是否足以回答用户问题。返回各维度评分（覆盖度/一致性/时效性/权威性/完整性），以及缺失信息清单。当你不确定证据是否足够时调用。",
         "parameters": {
             "type": "object",
             "properties": {
                 "question": {"type": "string", "description": "需要评估的用户原始问题"},
                 "evidence": {"type": "string", "description": "当前已收集的证据摘要"},
             },
-            "required": ["question", "evidence"],
+            "required": ["question"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+SUMMARIZE_CONTEXT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "summarize_context",
+        "description": "把当前已收集的早期证据压缩为一段摘要，释放上下文空间。当证据过多、重复，或回复中提示 token 预算紧张时使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "触发压缩的原因（可选，供审计）"},
+            },
+            "required": [],
             "additionalProperties": False,
         },
     },
@@ -167,7 +184,28 @@ TOOLS: list[dict] = [
     WEB_SEARCH_TOOL,
     MEMORY_RECALL_TOOL,
     EVALUATE_CONTEXT_TOOL,
+    SUMMARIZE_CONTEXT_TOOL,
 ]
+
+# ── 多维评估（P2.1：覆盖/一致性/时效/权威/完整，作为工具而非必经节点） ──
+EVALUATE_MULTIDIM_SYSTEM = """你是 RAG 证据质量评估员。请从 5 个维度评估给定的【证据】对回答【用户问题】的支撑质量，每个维度输出 0.0~1.0 的分数：
+1. coverage（覆盖度）：关键知识点、术语、概念是否都被证据覆盖
+2. consistency（一致性）：不同证据片段之间是否存在矛盾或冲突
+3. timeliness（时效性）：内容是否过时（教材类内容通常为 1.0；网络资料需注意时效）
+4. authority（权威性）：来源是否权威（教材原文 > 网络搜索 > 记忆召回）
+5. completeness（完整性）：推导步骤、论证过程是否完整，还是仅有结论
+
+输出 JSON，不要包含其他内容：
+{
+  "coverage": 0.0~1.0,
+  "consistency": 0.0~1.0,
+  "timeliness": 0.0~1.0,
+  "authority": 0.0~1.0,
+  "completeness": 0.0~1.0,
+  "weaknesses": ["不足维度对应的具体问题描述"]
+}"""
+
+_SUMMARY_TRIGGER_RATIO = 0.5  # token 预算用掉 50% 时，harness 自动触发早期证据压缩
 
 
 # ── 证据注册表（方案 §5.8） ──────────────────────────────
@@ -192,6 +230,7 @@ class EvidenceRegistry:
         self._next_ref = 1
         self._merged_ctx: str | None = None
         self._included_ref_ids: list[str] = []
+        self._summarized = False
 
     def register(self, context_xml: str, metadata: dict[str, Any] | None = None) -> None:
         """登记一次工具结果，把局部 ref_id 重写为全局 id，并同步 citation_map。
@@ -269,6 +308,34 @@ class EvidenceRegistry:
         """原始证据块（含全局 ref_id），供 state["evidence"] 审计。"""
         return list(self._blocks)
 
+    # ── P2.2 早期证据压缩（summarize_context） ──
+    @property
+    def summarized(self) -> bool:
+        """是否已执行过一次早期证据压缩（每轮 agent 只压一次）。"""
+        return self._summarized
+
+    def can_summarize(self) -> bool:
+        """存在 ≥2 块证据且尚未压缩过时，允许压缩早期证据。"""
+        return not self._summarized and len(self._blocks) >= 2
+
+    def summarize_early(self, count: int, summary_text: str) -> int:
+        """把前 count 块证据替换为一段摘要（无 source 引用的纯文本），返回实际压缩块数。
+
+        被压缩块的 citation_map 条目保留但不再出现在 merged_citation_map()
+        （摘要块没有 <source> 标签，_included_ref_ids 不含它们）。
+        """
+        if count <= 0 or not self._blocks or self._summarized:
+            return 0
+        count = min(count, len(self._blocks))
+        summary_block = f"<summary>早期证据摘要：{summary_text}</summary>"
+        self._blocks = [summary_block] + self._blocks[count:]
+        self._block_ref_ids = [[]] + self._block_ref_ids[count:]
+        self._summarized = True
+        self._merged_ctx = None
+        self._included_ref_ids = []
+        logger.info("EvidenceRegistry.summarize_early: 压缩 %d 块为摘要", count)
+        return count
+
 
 # ── Guardrails（方案 §8：确定性与"LLM 自主"的边界） ──────
 class Guardrails:
@@ -289,6 +356,7 @@ class Guardrails:
         "web_search": ["query"],
         "memory_recall": ["query"],
         "evaluate_context": ["question"],
+        "summarize_context": [],
     }
 
     def __init__(self, *, max_steps: int, max_web_searches: int, token_budget: int) -> None:
@@ -468,8 +536,44 @@ async def _tool_memory_recall(args: dict, state: dict, evidence: EvidenceRegistr
     return "\n".join(lines)
 
 
+async def evaluate_multidim(query: str, context: str) -> dict[str, Any]:
+    """P2.1 五维证据质量评估（覆盖/一致性/时效/权威/完整）。
+
+    LLM 无 API key 或解析失败时返回空 dict（由调用方决定降级展示）。
+    """
+    if not settings.llm_api_key:
+        logger.warning("evaluate_multidim: LLM API key 未配置，返回空评分")
+        return {}
+    try:
+        client = AsyncOpenAI(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+        )
+        response = await client.chat.completions.create(
+            model=settings.llm_model,
+            messages=[
+                {"role": "system", "content": EVALUATE_MULTIDIM_SYSTEM},
+                {"role": "user", "content": f"【用户问题】\n{query}"
+                 f"\n\n【证据】\n{_truncate(context, 4000)}"},
+            ],
+            temperature=0.2,
+            max_tokens=300,
+        )
+        raw = response.choices[0].message.content or ""
+        data = json.loads(raw.strip())
+        if not isinstance(data, dict):
+            return {}
+        return {
+            k: float(data.get(k, 0.0))
+            for k in ("coverage", "consistency", "timeliness", "authority", "completeness")
+        } | {"weaknesses": data.get("weaknesses", []) if isinstance(data.get("weaknesses"), list) else []}
+    except Exception as e:
+        logger.warning("evaluate_multidim 失败: %s", e)
+        return {}
+
+
 async def _tool_evaluate_context(args: dict, state: dict, evidence: EvidenceRegistry) -> str:
-    """evaluate_context：证据充分性评估（check_sufficiency，kp_paths 从注册表提取）。"""
+    """evaluate_context：证据充分性评估（check_sufficiency 规则+LLM）+ P2.1 五维评分。"""
     question = args["question"]
     evidence_text = args.get("evidence") or evidence.merged_context()
     if not evidence_text.strip():
@@ -487,11 +591,96 @@ async def _tool_evaluate_context(args: dict, state: dict, evidence: EvidenceRegi
         lines.append(f"缺失信息：{result['missing_info']}")
     if result.get("uncovered_aspects"):
         lines.append(f"未覆盖方面：{'；'.join(result['uncovered_aspects'])}")
+
+    # P2.1: 五维评分（无 key / 失败时静默省略该段，不阻塞主结论）
+    multidim = await evaluate_multidim(question, evidence_text)
+    if multidim:
+        labels = {
+            "coverage": "覆盖度", "consistency": "一致性", "timeliness": "时效性",
+            "authority": "权威性", "completeness": "完整性",
+        }
+        scores = "，".join(
+            f"{labels[k]} {multidim.get(k, 0.0):.2f}"
+            for k in labels if k in multidim
+        )
+        lines.append(f"多维评分（P2.1）：{scores}")
+        weaknesses = multidim.get("weaknesses") or []
+        if weaknesses:
+            lines.append(f"薄弱点：{'；'.join(str(w)[:80] for w in weaknesses[:3])}")
+
     if sufficient:
         lines.append("结论：证据已足够，可以停止检索并输出最终回答。")
     else:
         lines.append("结论：证据不足，请继续检索（改写查询、检索缺失概念，或最后考虑 web_search）。")
     return "\n".join(lines)
+
+
+async def _summarize_evidence(evidence: EvidenceRegistry) -> str:
+    """P2.2 用 LLM 生成早期证据的摘要（被压缩块 = 前一半的已登记块）。"""
+    blocks = evidence.raw_blocks()
+    if not blocks:
+        return ""
+    # 压缩前一半块；保留 <source> 标签会让摘要引用错位，这里剥离标签只取文本
+    early = _truncate("\n".join(blocks[: max(1, len(blocks) // 2)]), 6000)
+    if not settings.llm_api_key:
+        return f"（无 LLM key，摘要省略）共 {len(blocks)} 块证据"
+    try:
+        client = AsyncOpenAI(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+        )
+        response = await client.chat.completions.create(
+            model=settings.llm_model,
+            messages=[
+                {"role": "system", "content": (
+                    "把下面的教材/资料证据片段压缩成一段 200 字以内的中文摘要，"
+                    "保留与问题可能相关的关键事实、定义、定理，去掉重复与无关内容。"
+                    "直接输出摘要正文，不要加任何前缀。")},
+                {"role": "user", "content": early},
+            ],
+            temperature=0.3,
+            max_tokens=400,
+        )
+        return (response.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.warning("_summarize_evidence 失败: %s", e)
+        return f"（摘要生成失败：{e}）"
+
+
+async def _tool_summarize_context(args: dict, state: dict, evidence: EvidenceRegistry) -> str:
+    """summarize_context：压缩早期证据，释放上下文空间。"""
+    if not evidence.can_summarize():
+        return ("summarize_context：当前证据不足 2 块或已压缩过，无需压缩。"
+                "请先调用 search_textbook 检索教材。")
+    blocks = evidence.raw_blocks()
+    compress_count = max(1, len(blocks) // 2)
+    summary = await _summarize_evidence(evidence)
+    compressed = evidence.summarize_early(compress_count, summary)
+    reason = args.get("reason", "")
+    return (f"summarize_context：已把前 {compressed} 块早期证据压缩为摘要"
+            f"（触发原因：{reason or 'LLM 自主决定'}）。\n"
+            f"摘要：{summary}")
+
+
+async def _maybe_auto_summarize(
+    messages: list[dict], guard: Guardrails, evidence: EvidenceRegistry,
+) -> None:
+    """P2.2 harness 自动触发：token 预算用掉一半且证据未压缩时压缩早期证据。
+
+    确定性 harness 行为（不经 LLM 决策），把压缩结果以 system 消息注入。
+    """
+    if (guard.token_used < guard.token_budget * _SUMMARY_TRIGGER_RATIO
+            or not evidence.can_summarize()):
+        return
+    summary = await _summarize_evidence(evidence)
+    compressed = evidence.summarize_early(
+        max(1, len(evidence.raw_blocks()) // 2), summary,
+    )
+    logger.info("_maybe_auto_summarize: token=%d/%d，自动压缩 %d 块早期证据",
+                guard.token_used, guard.token_budget, compressed)
+    messages.append({"role": "system", "content":
+        f"harness：早期 {compressed} 块证据已压缩为摘要以节省 token。"
+        f"摘要：{_truncate(summary, 500)}"})
 
 
 # ── 工具分发 ──────────────────────────────────────────────
@@ -501,6 +690,7 @@ TOOL_DISPATCH: dict[str, Callable] = {
     "web_search": _tool_web_search,
     "memory_recall": _tool_memory_recall,
     "evaluate_context": _tool_evaluate_context,
+    "summarize_context": _tool_summarize_context,
 }
 
 
@@ -611,6 +801,9 @@ async def agentic_rag_node(state: dict[str, Any]) -> dict[str, Any]:
             forced_stop = True
             break
 
+        # P2.2: token 预算用掉一半且证据未压缩时，harness 自动压缩早期证据
+        await _maybe_auto_summarize(messages, guard, evidence)
+
         try:
             response = await client.chat.completions.create(
                 model=settings.llm_model,
@@ -638,6 +831,8 @@ async def agentic_rag_node(state: dict[str, Any]) -> dict[str, Any]:
 
         messages.append(message)  # assistant 的 tool_calls 必须回传
 
+        # P2.3: 先统一解析 + guardrail 校验，再并发执行合法的工具调用
+        prepared: list[tuple[Any, str, dict, str | None]] = []
         for call in message.tool_calls:
             fn = call.function
             tool_name = fn.name
@@ -648,8 +843,19 @@ async def agentic_rag_node(state: dict[str, Any]) -> dict[str, Any]:
             except json.JSONDecodeError:
                 args = {}
             agent_steps.append({"tool": tool_name, "args": fn.arguments})
-
             rejection = guard.before_tool(tool_name, args, tool_history)
+            prepared.append((call, tool_name, args, rejection))
+
+        valid = [(c, tn, a) for (c, tn, a, rj) in prepared if rj is None]
+        results: list[str] = []
+        if valid:
+            results = await asyncio.gather(
+                *(dispatch_tool(tn, a, state, evidence) for (_, tn, a) in valid)
+            )
+        result_iter = iter(results)
+
+        # 按原始 tool_calls 顺序回传结果（并发执行、顺序组装，tool_call_id 严格匹配）
+        for call, tool_name, args, rejection in prepared:
             if rejection is not None:
                 messages.append({
                     "role": "tool",
@@ -657,8 +863,7 @@ async def agentic_rag_node(state: dict[str, Any]) -> dict[str, Any]:
                     "content": rejection,
                 })
                 continue
-
-            result = await dispatch_tool(tool_name, args, state, evidence)
+            result = next(result_iter)
             tool_history.append({
                 "tool": tool_name,
                 "args": args,

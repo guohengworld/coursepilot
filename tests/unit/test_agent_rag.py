@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -520,13 +521,23 @@ class TestToolExecutors:
                        new_callable=AsyncMock,
                        return_value={"sufficient": False, "confidence": 0.3,
                                      "missing_info": "缺极限计算", "covered_aspects": [],
-                                     "uncovered_aspects": ["极限计算"]}):
+                                     "uncovered_aspects": ["极限计算"]}), \
+                    patch("coursepilot.agent.rag_agent.evaluate_multidim",
+                          new_callable=AsyncMock,
+                          return_value={"coverage": 0.5, "consistency": 1.0,
+                                        "timeliness": 1.0, "authority": 0.9,
+                                        "completeness": 0.4,
+                                        "weaknesses": ["缺少计算步骤"]}):
                 result = await rag_agent._tool_evaluate_context(
                     {"question": "极限怎么算", "evidence": "已有证据"},
                     make_state(), evidence,
                 )
             assert "sufficient=False" in result
             assert "缺极限计算" in result
+            # P2.1: 五维评分输出
+            assert "多维评分（P2.1）" in result
+            assert "覆盖度" in result and "完整性" in result
+            assert "缺少计算步骤" in result
             assert "继续检索" in result
             return True
 
@@ -607,3 +618,246 @@ class TestFinalizeAnswer:
             return True
 
         assert asyncio_run(run())
+
+
+# ═══════════════════════════════════════════════════════════════
+# P2.1 五维评估 evaluate_multidim
+# ═══════════════════════════════════════════════════════════════
+
+class TestEvaluateMultidim:
+    """五维评分：mock LLM JSON 解析 / 无 key 降级 / 解析失败降级。"""
+
+    def test_parses_five_dimensions(self):
+        async def run():
+            resp = SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "coverage": 0.8, "consistency": 1.0, "timeliness": 1.0,
+                    "authority": 0.9, "completeness": 0.6,
+                    "weaknesses": ["推导步骤缺失"],
+                })))],
+            )
+            with patch.object(rag_agent.settings, "llm_api_key", "key"), \
+                    patch("coursepilot.agent.rag_agent.AsyncOpenAI") as mock_cls:
+                client = mock_cls.return_value
+                client.chat.completions.create = AsyncMock(return_value=resp)
+                result = await rag_agent.evaluate_multidim("问题", "证据")
+            assert result["coverage"] == 0.8
+            assert result["completeness"] == 0.6
+            assert result["weaknesses"] == ["推导步骤缺失"]
+            return True
+
+        assert asyncio_run(run())
+
+    def test_no_api_key_returns_empty(self):
+        async def run():
+            with patch.object(rag_agent.settings, "llm_api_key", ""):
+                result = await rag_agent.evaluate_multidim("问题", "证据")
+            assert result == {}
+            return True
+
+        assert asyncio_run(run())
+
+    def test_bad_json_returns_empty(self):
+        async def run():
+            resp = SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="不是JSON"))],
+            )
+            with patch.object(rag_agent.settings, "llm_api_key", "key"), \
+                    patch("coursepilot.agent.rag_agent.AsyncOpenAI") as mock_cls:
+                client = mock_cls.return_value
+                client.chat.completions.create = AsyncMock(return_value=resp)
+                result = await rag_agent.evaluate_multidim("问题", "证据")
+            assert result == {}
+            return True
+
+        assert asyncio_run(run())
+
+
+# ═══════════════════════════════════════════════════════════════
+# P2.2 早期证据压缩（EvidenceRegistry.summarize_early / 工具 / 自动触发）
+# ═══════════════════════════════════════════════════════════════
+
+class TestSummarizeContext:
+    """summarize_context 工具 + harness 自动压缩（P2.2）。"""
+
+    CTX1 = '<source id="1" path="/k1" pages="3" book="b">导数定义...</source>'
+    CTX2 = '<source id="2" path="/k2" pages="10" book="b">定积分定义...</source>'
+    CTX3 = '<source id="3" path="/k3" pages="20" book="b">拉格朗日...</source>'
+
+    def test_summarize_early_replaces_early_blocks(self):
+        reg = EvidenceRegistry()
+        reg.register(self.CTX1, {})
+        reg.register(self.CTX2, {})
+        reg.register(self.CTX3, {})
+
+        compressed = reg.summarize_early(2, "早期证据摘要")
+        assert compressed == 2
+        assert reg.summarized is True
+        blocks = reg.raw_blocks()
+        assert len(blocks) == 2                 # 摘要块 + 剩余 1 块
+        assert "<summary>早期证据摘要：早期证据摘要</summary>" in blocks[0]
+        assert 'id="3"' in blocks[1]            # 未被压缩块保留
+        # 引用映射只含未被压缩块
+        assert set(reg.merged_citation_map()) == {"3"}
+
+    def test_summarize_early_noop_when_already_summarized(self):
+        reg = EvidenceRegistry()
+        reg.register(self.CTX1, {})
+        reg.register(self.CTX2, {})
+        reg.summarize_early(1, "摘要")
+        assert reg.summarize_early(1, "再次") == 0
+        assert len(reg.raw_blocks()) == 2
+
+    def test_can_summarize_requires_two_blocks(self):
+        reg = EvidenceRegistry()
+        assert reg.can_summarize() is False
+        reg.register(self.CTX1, {})
+        assert reg.can_summarize() is False
+        reg.register(self.CTX2, {})
+        assert reg.can_summarize() is True
+
+    def test_tool_summarize_context_success(self):
+        async def run():
+            evidence = EvidenceRegistry()
+            evidence.register(self.CTX1, {})
+            evidence.register(self.CTX2, {})
+            with patch("coursepilot.agent.rag_agent._summarize_evidence",
+                       new_callable=AsyncMock, return_value="压缩后的摘要"):
+                result = await rag_agent._tool_summarize_context(
+                    {"reason": "证据过长"}, make_state(), evidence,
+                )
+            assert "已把前 1 块早期证据压缩为摘要" in result
+            assert "压缩后的摘要" in result
+            assert evidence.summarized is True
+            return True
+
+        assert asyncio_run(run())
+
+    def test_tool_summarize_context_no_evidence(self):
+        async def run():
+            result = await rag_agent._tool_summarize_context(
+                {}, make_state(), EvidenceRegistry(),
+            )
+            assert "无需压缩" in result
+            return True
+
+        assert asyncio_run(run())
+
+    def test_auto_summarize_over_threshold(self):
+        """token 用掉 ≥50% 预算且证据未压缩 → harness 自动压缩并注入 system 消息。"""
+        async def run():
+            guard = Guardrails(max_steps=10, max_web_searches=2, token_budget=100)
+            guard.accrue_tokens(60)   # 60 >= 50
+            evidence = EvidenceRegistry()
+            evidence.register(self.CTX1, {})
+            evidence.register(self.CTX2, {})
+            messages = []
+            with patch("coursepilot.agent.rag_agent._summarize_evidence",
+                       new_callable=AsyncMock, return_value="摘要"):
+                await rag_agent._maybe_auto_summarize(messages, guard, evidence)
+            assert evidence.summarized is True
+            sys_msg = [m for m in messages if m["role"] == "system"]
+            assert len(sys_msg) == 1
+            assert "已压缩为摘要" in sys_msg[0]["content"]
+            return True
+
+        assert asyncio_run(run())
+
+    def test_auto_summarize_below_threshold(self):
+        async def run():
+            guard = Guardrails(max_steps=10, max_web_searches=2, token_budget=100)
+            guard.accrue_tokens(30)   # 30 < 50
+            evidence = EvidenceRegistry()
+            evidence.register(self.CTX1, {})
+            evidence.register(self.CTX2, {})
+            messages = []
+            await rag_agent._maybe_auto_summarize(messages, guard, evidence)
+            assert evidence.summarized is False
+            assert messages == []
+            return True
+
+        assert asyncio_run(run())
+
+    def test_auto_summarize_skips_when_no_evidence(self):
+        async def run():
+            guard = Guardrails(max_steps=10, max_web_searches=2, token_budget=100)
+            guard.accrue_tokens(80)
+            evidence = EvidenceRegistry()
+            messages = []
+            await rag_agent._maybe_auto_summarize(messages, guard, evidence)
+            assert messages == []
+            return True
+
+        assert asyncio_run(run())
+
+
+# ═══════════════════════════════════════════════════════════════
+# P2.3 并行工具执行（多 tool_calls 时 asyncio.gather 并发）
+# ═══════════════════════════════════════════════════════════════
+
+class TestParallelToolExecution:
+    """一次返回多个 tool_calls → 并发执行、按顺序回传、tool_call_id 匹配。"""
+
+    @patch.object(rag_agent.settings, "llm_api_key", "test-key")
+    @patch.object(rag_config, "agent_max_steps", 8)
+    @patch.object(rag_agent, "dispatch_tool", new_callable=AsyncMock,
+                  side_effect=lambda *a, **k: f"结果:{a[0]}")
+    @patch.object(rag_agent, "finalize_answer", new_callable=AsyncMock)
+    async def test_parallel_tool_calls_executed_and_matched(
+        self, mock_finalize, mock_dispatch, *_args,
+    ):
+        """2 个 tool_calls 并发执行，tool 消息按原始顺序回传且 tool_call_id 匹配。"""
+        mock_finalize.return_value = {"answer": "最终答案"}
+        responses = [
+            make_response(tool_calls=[
+                make_tool_call("call_a", "search_textbook", '{"query": "极限"}'),
+                make_tool_call("call_b", "web_search", '{"query": "拉格朗日"}'),
+            ]),
+            make_response(content="够了。"),
+        ]
+        with patch("coursepilot.agent.rag_agent.AsyncOpenAI") as mock_cls:
+            client = mock_cls.return_value
+            client.chat.completions.create = AsyncMock(side_effect=responses)
+
+            result = await rag_agent.agentic_rag_node(make_state())
+
+        # 两个工具都被分发（并发）
+        assert mock_dispatch.await_count == 2
+        # 按原始顺序回传：call_a 先
+        second_messages = client.chat.completions.create.await_args_list[1].kwargs["messages"]
+        tool_msgs = [m for m in second_messages if isinstance(m, dict) and m.get("role") == "tool"]
+        assert [m["tool_call_id"] for m in tool_msgs] == ["call_a", "call_b"]
+        assert [m["content"] for m in tool_msgs] == ["结果:search_textbook", "结果:web_search"]
+        assert result["answer"] == "最终答案"
+
+    @patch.object(rag_agent.settings, "llm_api_key", "test-key")
+    @patch.object(rag_config, "agent_max_steps", 8)
+    @patch.object(rag_agent, "dispatch_tool", new_callable=AsyncMock,
+                  side_effect=lambda *a, **k: "结果")
+    @patch.object(rag_agent, "finalize_answer", new_callable=AsyncMock)
+    async def test_partial_rejection_does_not_block_valid_calls(
+        self, mock_finalize, mock_dispatch, *_args,
+    ):
+        """一个调用参数缺失被拒，另一个合法调用仍并发执行并回传。"""
+        mock_finalize.return_value = {"answer": "答案"}
+        responses = [
+            make_response(tool_calls=[
+                make_tool_call("call_bad", "search_textbook", '{"top_k": 3}'),  # 缺 query
+                make_tool_call("call_ok", "web_search", '{"query": "拉格朗日"}'),
+            ]),
+            make_response(content="好了。"),
+        ]
+        with patch("coursepilot.agent.rag_agent.AsyncOpenAI") as mock_cls:
+            client = mock_cls.return_value
+            client.chat.completions.create = AsyncMock(side_effect=responses)
+
+            await rag_agent.agentic_rag_node(make_state())
+
+        # 合法调用执行 1 次；被拒调用不执行
+        assert mock_dispatch.await_count == 1
+        assert mock_dispatch.await_args.args[0] == "web_search"
+        second_messages = client.chat.completions.create.await_args_list[1].kwargs["messages"]
+        tool_msgs = [m for m in second_messages if isinstance(m, dict) and m.get("role") == "tool"]
+        assert [m["tool_call_id"] for m in tool_msgs] == ["call_bad", "call_ok"]
+        assert "缺少必填参数" in tool_msgs[0]["content"]
+        assert tool_msgs[1]["content"] == "结果"
