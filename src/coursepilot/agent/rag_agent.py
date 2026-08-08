@@ -38,7 +38,7 @@ AGENT_REACT_SYSTEM_PROMPT = """你是 CoursePilot 的数学答疑助手。针对
 
 可用工具：
 - search_textbook(query, top_k)：在当前课程教材中检索知识点内容（概念定义、定理、公式、推导）。默认首选。
-- plan(query)：把复杂问题拆解为多个可独立检索的子问题（比较类、多步推理、跨章节问题）。检索前可先规划。
+- plan(query, sub_questions)：把复杂问题拆解为多个可独立检索的子问题（比较类、多步推理、跨章节问题）。调用后系统会自动并行检索所有子问题并返回结果，无需再逐个 search_textbook。
 - web_search(query)：教材检索不足时搜索互联网补充。成本较高，最后考虑。
 - memory_recall(query)：检索学生在本课程的历史问答记录。涉及"我上次问的"等个性化场景时使用。
 - evaluate_context(question, evidence)：评估当前已收集的证据是否足以回答问题。不确定证据是否足够时调用。
@@ -84,7 +84,7 @@ PLAN_TOOL = {
     "type": "function",
     "function": {
         "name": "plan",
-        "description": "将复杂问题拆解为多个独立的、可单独检索的子问题。适用于：多概念比较（A 和 B 的区别）、多步推理、跨章节问题、含假设与结论两部分的问题。对单一概念问题不要调用，直接 search_textbook。",
+        "description": "将复杂问题拆解为多个独立的、可单独检索的子问题。适用于：多概念比较（A 和 B 的区别）、多步推理、跨章节问题、含假设与结论两部分的问题。调用后系统会自动并行检索你提供的每个子问题并返回全部检索结果，无需再逐个调用 search_textbook。对单一概念问题不要调用，直接 search_textbook。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -246,12 +246,13 @@ class EvidenceRegistry:
         if not blocks:
             blocks = [context_xml]
 
-        new_ref_ids: list[str] = []
         rewritten: list[str] = []
+        ref_ids_per_block: list[list[str]] = []
         for block in blocks:
             m = _SOURCE_TAG_PAT.search(block)
             if not m:
                 rewritten.append(block)
+                ref_ids_per_block.append([])
                 continue
             local_id = m.group(1)
             tag_rest = m.group(2)
@@ -266,10 +267,12 @@ class EvidenceRegistry:
                 path_m = _PATH_ATTR_PAT.search(tag_rest)
                 local_meta = {"kp_path": path_m.group(1) if path_m else ""}
             self.citation_map[new_ref] = dict(local_meta)
-            new_ref_ids.append(new_ref)
+            ref_ids_per_block.append([new_ref])
 
         self._blocks.extend(rewritten)
-        self._block_ref_ids.append(new_ref_ids)
+        # 保持 _block_ref_ids 与 _blocks 一一对应（每块一个列表），
+        # 否则 _build_merged 按块索引 ref_id 时会越界
+        self._block_ref_ids.extend(ref_ids_per_block)
         # 合并缓存失效
         self._merged_ctx = None
         self._included_ref_ids = []
@@ -463,27 +466,39 @@ def _truncate(text: str, max_chars: int) -> str:
 
 
 # ── 工具执行器（方案 §5：包装现有技能，零重写） ────────────
-async def _tool_search_textbook(args: dict, state: dict, evidence: EvidenceRegistry) -> str:
-    """search_textbook：教材检索（Retriever 六阶段管线原样复用）。
+async def _retrieve_textbook(
+    query: str,
+    course_id: str,
+    top_k: int | None = None,
+) -> tuple[str, dict]:
+    """教材检索（Retriever 六阶段管线原样复用）。
 
-    Retriever.retrieve 不接受 top_k 参数，通过临时覆盖 rag_config.rerank_top_k 实现
-    （复用 query_rag_node 简单通道的既有模式）。
+    Retriever.retrieve 不接受 top_k 参数：
+    - top_k 指定时通过临时覆盖 rag_config.rerank_top_k 实现（复用 query_rag_node
+      简单通道的既有模式）；
+    - top_k 为 None 时直接用默认配置、不修改全局状态——可安全并行调用（否则
+      并发协程互相覆盖/恢复 rag_config.rerank_top_k 会产生竞态）。
     """
-    query = args["query"]
-    top_k = min(int(args.get("top_k", 5)), 10)
-
     from coursepilot.rag.retriever import Retriever
+
+    if top_k is None:
+        async with async_session_factory() as session:
+            return await Retriever().retrieve(session, query, course_id)
 
     saved = rag_config.rerank_top_k
     rag_config.rerank_top_k = top_k
     try:
         async with async_session_factory() as session:
-            context, metadata = await Retriever().retrieve(
-                session, query, state["course_id"],
-            )
+            return await Retriever().retrieve(session, query, course_id)
     finally:
         rag_config.rerank_top_k = saved
 
+
+async def _tool_search_textbook(args: dict, state: dict, evidence: EvidenceRegistry) -> str:
+    """search_textbook：教材检索（Retriever 六阶段管线原样复用）。"""
+    query = args["query"]
+    top_k = min(int(args.get("top_k", 5)), 10)
+    context, metadata = await _retrieve_textbook(query, state["course_id"], top_k=top_k)
     if not context.strip():
         return "search_textbook：未检索到相关内容。可尝试改写查询，或改用 web_search。"
 
@@ -491,19 +506,72 @@ async def _tool_search_textbook(args: dict, state: dict, evidence: EvidenceRegis
     return f"search_textbook 结果（已登记证据，可用 <ref id=\"N\"> 引用）：\n{_truncate(context, 3000)}"
 
 
+def _normalize_sub_queries(
+    llm_sub_questions: Any,
+    decomposed: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """归一化子问题列表：优先 LLM 传入（schema: question/target_concept/reason），
+    无效时回退 decompose_query 结果（schema: query/target_concept/reason）。"""
+    candidates: list[dict[str, Any]] | None = None
+    if isinstance(llm_sub_questions, list) and llm_sub_questions:
+        candidates = llm_sub_questions
+    elif decomposed.get("sub_queries"):
+        candidates = decomposed["sub_queries"]
+
+    normalized: list[dict[str, Any]] = []
+    for sq in candidates or []:
+        if not isinstance(sq, dict):
+            continue
+        q = sq.get("question") or sq.get("query")
+        if not q:
+            continue
+        normalized.append({
+            "query": q,
+            "target_concept": sq.get("target_concept", ""),
+            "reason": sq.get("reason", ""),
+        })
+    return normalized
+
+
 async def _tool_plan(args: dict, state: dict, evidence: EvidenceRegistry) -> str:
-    """plan：复杂问题拆解（decompose_query，规则优先 + LLM 分解）。"""
+    """plan：复杂问题拆解（LLM 传入 sub_questions 优先，回退 decompose_query）。
+
+    分解出的子问题由 harness 异步并行检索教材（asyncio.gather），全部收束后
+    按子问题顺序汇总结果并登记证据——LLM 无需再逐个调用 search_textbook。
+    """
     query = args["query"]
-    result = await decompose_query(query, state.get("course_context"))
-    sub_queries = result.get("sub_queries") or []
+    llm_sub = args.get("sub_questions")
+    decomposed: dict[str, Any] = {}
+    if not (isinstance(llm_sub, list) and llm_sub):
+        decomposed = await decompose_query(query, state.get("course_context"))
+    sub_queries = _normalize_sub_queries(llm_sub, decomposed)
     if not sub_queries:
         return "plan：该问题无需分解，请直接调用 search_textbook 检索。"
 
-    lines = [f"plan 分解结果（{result.get('decomposition_type', 'single')}，{len(sub_queries)} 个子问题）："]
-    for sq in sub_queries:
-        lines.append(f"- [{sq.get('id')}] {sq.get('query')}"
-                     f"（目标知识点：{sq.get('target_concept', '')}）")
-    lines.append("你可以逐个调用 search_textbook 检索每个子问题，再综合回答。")
+    async def retrieve_one(idx: int, sq: dict) -> str:
+        """单个子问题检索：异常/空结果独立降级，不阻塞其余子问题（并行收束）。"""
+        try:
+            context, metadata = await _retrieve_textbook(sq["query"], state["course_id"])
+        except Exception as e:
+            logger.exception("plan 子问题检索异常: %s", sq["query"])
+            return f"[子问题 {idx} 检索失败]：{e}"
+        if not context.strip():
+            return f"[子问题 {idx} 检索结果]：未检索到相关内容。"
+        evidence.register(context, metadata)
+        return f"[子问题 {idx} 检索结果]：\n{_truncate(context, 1500)}"
+
+    # 异步并行检索所有子问题；gather 天然收束（全部完成后才继续）
+    results = await asyncio.gather(
+        *(retrieve_one(idx, sq) for idx, sq in enumerate(sub_queries, start=1))
+    )
+
+    lines = [
+        f"plan 分解结果（{len(sub_queries)} 个子问题，已并行检索教材）：",
+        *[f"- [{idx}] {sq['query']}（目标知识点：{sq.get('target_concept', '')}）"
+          for idx, sq in enumerate(sub_queries, start=1)],
+        "你可以基于以上全部检索结果直接综合回答；个别子问题资料不足时，可补充 web_search 或 memory_recall。",
+    ]
+    lines.extend(results)
     return "\n".join(lines)
 
 

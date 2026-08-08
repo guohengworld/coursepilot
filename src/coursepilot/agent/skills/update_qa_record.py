@@ -35,6 +35,7 @@ async def update_qa_record(
     qa = QARecord(
         user_id=UUID(user_id),
         course_id=UUID(course_id),
+        session_id=UUID(session_id) if session_id else None,
         query=query,
         answer=answer,
         kp_path=kp_path,

@@ -26,6 +26,11 @@ class QARecord(Base):
         nullable=False, index=True, comment="用户 ID",
     )
     course_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("courses.id"), index=True,)
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_sessions.id", ondelete="CASCADE"),
+        index=True, comment="所属会话 ID（L3 记忆 provenance 用）",
+    )
     query: Mapped[str] = mapped_column(Text, nullable=False, comment="问题",)
     kp_path: Mapped[str | None] = mapped_column(String(512), comment="知识点路径",)
     retrieved_units: Mapped[list | None] = mapped_column(

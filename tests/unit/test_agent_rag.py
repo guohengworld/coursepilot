@@ -114,6 +114,25 @@ class TestEvidenceRegistry:
         assert set(cmap) == {"1"}
         assert cmap["1"]["kp_path"] == "网络搜索/Sogou"
 
+    def test_register_multi_block_keeps_index_sync(self):
+        """一次 register 含多个 <source> 块时，_blocks 与 _block_ref_ids 必须一一对应，
+        否则 _build_merged 会索引越界（回归：IndexError: list index out of range）。"""
+        ctx = (
+            '<source id="1" path="/第一章/导数定义" pages="3" book="高数教材">导数定义...</source>\n'
+            '<source id="2" path="/第一章/极限" pages="5" book="高数教材">极限定义...</source>\n'
+            '<source id="3" path="/第一章/连续" pages="7" book="高数教材">连续定义...</source>'
+        )
+        reg = EvidenceRegistry()
+        reg.register(ctx, {})
+        merged = reg.merged_context()  # 不应抛 IndexError
+        assert '<source id="1"' in merged
+        assert '<source id="2"' in merged
+        assert '<source id="3"' in merged
+        assert set(reg.merged_citation_map()) == {"1", "2", "3"}
+        # 后续 register 仍保持不变量
+        reg.register('<source id="1" path="/第二章/定积分" pages="10" book="高数教材">定积分定义...</source>', {})
+        assert set(reg.merged_citation_map()) == {"1", "2", "3", "4"}
+
     def test_register_empty_context_noop(self):
         reg = EvidenceRegistry()
         reg.register("", {})
@@ -443,13 +462,104 @@ class TestToolExecutors:
             {"id": 2, "query": "极限的计算", "target_concept": "极限计算", "reason": "应用"},
         ]
 
+        async def fake_retrieve(query, course_id, top_k=None):
+            return (f'<source id="1" path="/k1" pages="3" book="b">{query}</source>',
+                    {"citation_map": {"1": {"uuid": "u1", "kp_path": f"/{query}", "page_ref": "3"}}})
+
         async def run():
             with patch("coursepilot.agent.rag_agent.decompose_query",
                        new_callable=AsyncMock,
-                       return_value={"sub_queries": sub, "decomposition_type": "sequential"}):
+                       return_value={"sub_queries": sub, "decomposition_type": "sequential"}), \
+                    patch("coursepilot.agent.rag_agent._retrieve_textbook", new=fake_retrieve):
                 result = await rag_agent._tool_plan({"query": "q"}, make_state(), EvidenceRegistry())
             assert "plan 分解结果" in result
             assert "什么是极限" in result
+            return True
+
+        assert asyncio_run(run())
+
+    def test_plan_parallel_retrieves_sub_queries(self):
+        """plan 分解后子问题异步并行检索，全部收束后按顺序汇总并登记证据。"""
+        sub = [
+            {"id": 1, "query": "什么是极限", "target_concept": "极限", "reason": "基础"},
+            {"id": 2, "query": "极限的计算", "target_concept": "极限计算", "reason": "应用"},
+        ]
+
+        async def fake_retrieve(query, course_id, top_k=None):
+            return (f'<source id="1" path="/k1" pages="3" book="b">{query}</source>',
+                    {"citation_map": {"1": {"uuid": "u1", "kp_path": f"/{query}", "page_ref": "3"}}})
+
+        async def run():
+            with patch("coursepilot.agent.rag_agent.decompose_query",
+                       new_callable=AsyncMock,
+                       return_value={"sub_queries": sub, "decomposition_type": "sequential"}), \
+                    patch("coursepilot.agent.rag_agent._retrieve_textbook", new=fake_retrieve):
+                evidence = EvidenceRegistry()
+                result = await rag_agent._tool_plan({"query": "q"}, make_state(), evidence)
+
+            # 收束：两个子问题都检索完成，结果按子问题顺序汇总
+            assert "已并行检索" in result
+            assert result.index("什么是极限") < result.index("极限的计算")
+            assert "[子问题 1 检索结果]" in result
+            assert "[子问题 2 检索结果]" in result
+            # 两个子问题的证据都已登记（局部 id 重写为全局 1/2）
+            assert set(evidence.merged_citation_map()) == {"1", "2"}
+            return True
+
+        assert asyncio_run(run())
+
+    def test_plan_parallel_isolation_on_subquery_failure(self):
+        """单个子问题检索失败/为空不阻塞其余子问题（收束后整体返回）。"""
+        sub = [
+            {"id": 1, "query": "A概念", "target_concept": "A", "reason": ""},
+            {"id": 2, "query": "B概念", "target_concept": "B", "reason": ""},
+        ]
+
+        async def fake_retrieve(query, course_id, top_k=None):
+            if query == "A概念":
+                raise RuntimeError("检索管线异常")
+            return "", {}
+
+        async def run():
+            with patch("coursepilot.agent.rag_agent.decompose_query",
+                       new_callable=AsyncMock,
+                       return_value={"sub_queries": sub, "decomposition_type": "compare"}), \
+                    patch("coursepilot.agent.rag_agent._retrieve_textbook", new=fake_retrieve):
+                evidence = EvidenceRegistry()
+                result = await rag_agent._tool_plan({"query": "q"}, make_state(), evidence)
+
+            assert "[子问题 1 检索失败]：检索管线异常" in result
+            assert "[子问题 2 检索结果]：未检索到相关内容" in result
+            # 空结果不登记证据
+            assert evidence.merged_citation_map() == {}
+            return True
+
+        assert asyncio_run(run())
+
+    def test_plan_prefers_llm_sub_questions(self):
+        """LLM 传入 sub_questions 时优先使用，不再走 decompose_query。"""
+        llm_sub = [
+            {"question": "问题A", "target_concept": "A", "reason": ""},
+            {"question": "问题B", "target_concept": "B", "reason": ""},
+        ]
+
+        async def fake_retrieve(query, course_id, top_k=None):
+            return (f'<source id="1" path="/k1" pages="3" book="b">{query}</source>',
+                    {"citation_map": {"1": {"uuid": "u1", "kp_path": f"/{query}", "page_ref": "3"}}})
+
+        async def run():
+            with patch("coursepilot.agent.rag_agent.decompose_query",
+                       new_callable=AsyncMock) as mock_decompose, \
+                    patch("coursepilot.agent.rag_agent._retrieve_textbook", new=fake_retrieve):
+                evidence = EvidenceRegistry()
+                result = await rag_agent._tool_plan(
+                    {"query": "q", "sub_questions": llm_sub}, make_state(), evidence,
+                )
+
+            mock_decompose.assert_not_awaited()
+            assert "问题A" in result
+            assert "问题B" in result
+            assert set(evidence.merged_citation_map()) == {"1", "2"}
             return True
 
         assert asyncio_run(run())
