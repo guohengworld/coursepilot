@@ -18,7 +18,7 @@ from dataclasses import dataclass
 class RAGConfig:
     """RAG 检索与生成管线的全部可调参数。
 
-    共 22 项，按功能分为 6 类：
+    共 26 项，按功能分为 6 类：
     功能开关、智能路由、阈值、检索参数、BM25 参数、编码参数。
     """
 
@@ -28,12 +28,16 @@ class RAGConfig:
     enable_bm25: bool = True          # BM25 检索：True→额外走 BM25 关键词检索；False→只用 Milvus
     enable_rerank: bool = True        # 重排序：True→cross-encoder 精排；False→RRF score 直接排序
     enable_kp_expand: bool = True     # KP 扩展：True→拉取同 KP 全部 unit 丰富上下文；False→仅用命中 unit
+    enable_agentic_rag: bool = False  # Agentic RAG 开关：True→复杂问题走 LLM 自主 ReAct 循环；False→沿用 CRAG 补搜路径（回滚开关）
 
     # ── 智能路由 ────────────────────────────────────────────────
     enable_routing: bool = True       # 智能路由：True→按复杂度走快慢通道；False→一律走全量流程
     simple_top_k: int = 3             # 简单通道最终送入 LLM 的 chunk 数（轻量检索）
     complex_max_rounds: int = 3       # 复杂问题最多补搜轮数（用于多轮质检+补搜）
     context_sufficiency_threshold: float = 0.7  # 质检通过阈值（用于上下文充足性判断）
+    agent_max_steps: int = 8          # Agent 循环最大步数（超过强制结束并降级）
+    agent_max_web_searches: int = 2   # Agent 循环中 web_search 工具最多调用次数
+    agent_token_budget: int = 8000    # Agent 循环累计 token 预算（含 messages 全量重发）
 
     kp_expand_mode: str = "full"      # KP 扩展模式："full"（同 KP 全量）| "neighbor"（相邻滑动窗口）
     kp_neighbor_window: int = 2       # neighbor 模式下前后各取 N 个相邻 unit（仅 mode="neighbor" 生效）

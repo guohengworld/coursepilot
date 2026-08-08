@@ -63,6 +63,11 @@ class AgentState(TypedDict):
     # 复习计划
     review_plan: dict           # review_plan 输出
 
+    # Agentic RAG（LLM 自主决策循环的决策轨迹）
+    agent_steps: list[dict]     # Agent 决策轨迹: [{tool, args}]
+    tool_history: list[dict]    # 工具执行历史: [{tool, args, result_summary}]
+    evidence: list[str]         # 多轮检索累积的证据块（供 finalize 合并与调试）
+
     # Token 用量追踪（P5 可观测：含 context_budget / layer_tokens / cache_hit_estimated）
     llm_calls: list[dict]
 
