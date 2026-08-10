@@ -1,10 +1,27 @@
-"""MCP Server 单元测试
+"""MCP Server 单元测试（已过时，整体跳过）
 
-覆盖 6 个 tool 函数，mock 所有 DB 和 LLM 依赖。
+**状态：过时（2026-08-10 标记）**。本文件测试的是 MCP 重构前的旧 API：
+位置参数签名（如 ``query_knowledge("query", "course-id")``）、已移除的函数
+（``student_report`` / ``query_mastery`` / ``diagnose_weakness`` 等）与旧的
+``server.py`` 单文件结构。
+
+当前实现的对应物：
+- 工具实现迁移至 ``src/coursepilot/mcp/tools/{tutor,practice,knowledge}.py``，
+  统一为 ``params: XxxParams -> CallToolResult`` 签名；
+- 协议级覆盖由 ``tests/test_mcp/``（test_gateway / test_stdio / test_schemas /
+  test_validation / test_errors）提供，本文件的单元覆盖已并入其中。
+
+处理建议：按新 API 重写（参照 ``docs/MCP_重构_TODO.md`` P1-T2 租户断言用例），
+或直接删除。在此之前整体 skip，避免 CI 误报。
 """
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+pytestmark = pytest.mark.skip(
+    reason="过时：测试 MCP 重构前的旧 API（位置参数签名 / 已删除函数），"
+    "已由 tests/test_mcp/ 下的协议级测试取代；重写或删除见 MCP_重构_TODO.md"
+)
 
 ZERO_TOKENS = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 

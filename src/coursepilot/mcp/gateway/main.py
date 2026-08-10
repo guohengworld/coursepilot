@@ -24,7 +24,7 @@ Streamable HTTP 采用无状态模式（``stateless_http=True``），每个请�
     PYTHONPATH=src uv run python -m coursepilot.mcp.gateway.main \\
         --ssl-certfile cert.pem --ssl-keyfile key.pem
 
-TLS/HTTPS（P3.1.6）：
+TLS/HTTPS：
 
   Gateway 只暴露 HTTPS，有两种方式：
 
@@ -218,7 +218,15 @@ class GatewayMiddleware:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """接入 Streamable HTTP 的 session manager（合并 routes 后必须手动启动）。"""
+    """接入 Streamable HTTP 的 session manager（合并 routes 后必须手动启动）。
+
+    [PRIVATE-API-MARK] 访问 ``mcp._lowlevel_server._session_manager`` 是
+    双下划线私有依赖（待清理）。
+    实测依据（mcp 2.0.0）：``_handle_request`` 首行即检查
+    ``self._task_group``，无状态模式同样依赖 ``session_manager.run()`` 初始化
+    task group；SDK 返回的 Starlette app 自带 ``lifespan=session_manager.run``，
+    正确姿势是不合并 routes 直接挂载，从而删除本函数与私有访问。
+    """
     session_manager = getattr(mcp._lowlevel_server, "_session_manager", None)
     if session_manager is not None:
         async with session_manager.run():
@@ -241,6 +249,8 @@ def create_app() -> FastAPI:
         json_response=True,   # 返回纯 JSON 而非 SSE 流，契合无状态单次请求-响应
         host=settings.mcp_host,
     )
+    # [DEPRECATED-MARK] SSE 传输已于 MCP 2026-07-28 规范弃用。
+    # 当前仅因 test_gateway.py 的 /sse 用例保留，重构时删除本段与下方路由合并。
     mcp_sse = mcp.sse_app(
         sse_path="/sse", message_path="/messages/", host=settings.mcp_host
     )

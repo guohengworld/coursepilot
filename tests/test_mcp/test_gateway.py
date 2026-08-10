@@ -1,7 +1,6 @@
 """Gateway 端到端测试：/health、/mcp 鉴权与 tools/list、/sse 兼容端点。
 
-覆盖 P3.1.1（健康检查）、P3.1.2（Streamable HTTP /mcp）、P3.1.3（SSE /sse）、
-P3.1.4（API Key 校验端到端）、P3.1.5（访问日志）。
+覆盖健康检查、Streamable HTTP /mcp、SSE /sse、API Key 校验端到端、访问日志。
 
 注意：TestClient 的 lifespan 关闭（session_manager 关停）在当前 SDK 版本会
 卡住，故 fixture 调用 ``__enter__`` 启动 lifespan 但不调 ``__exit__``，
@@ -48,7 +47,7 @@ def client():
     t.join(timeout=5)
 
 
-# ── P3.1.1 健康检查 ────────────────────────────────────────
+# ── 健康检查 ─────────────────────────────────────────────
 def test_health_ok(client):
     """/health 返回 200 且无需 API Key。"""
     r = client.get("/health")
@@ -56,7 +55,7 @@ def test_health_ok(client):
     assert r.json() == {"status": "ok"}
 
 
-# ── P3.1.4 API Key 校验（端到端）──────────────────────────
+# ── API Key 校验（端到端）──────────────────────────────
 def test_mcp_missing_key_401(client):
     """缺失 Authorization 头 → 401。"""
     r = client.post("/mcp", json=_TOOLS_LIST)
@@ -90,7 +89,7 @@ def test_mcp_three_valid_keys_pass(client):
         assert r.status_code == 200, f"{key} 应通过校验"
 
 
-# ── P3.1.2 Streamable HTTP /mcp ───────────────────────────
+# ── Streamable HTTP /mcp ──────────────────────────────
 def test_mcp_tools_list(client):
     """有效 key 调 tools/list 返回全部 7 个工具。"""
     r = client.post(
@@ -140,7 +139,7 @@ def test_mcp_tools_call_invalid_course(client):
     assert "不存在" in result["content"][0]["text"]
 
 
-# ── P3.1.3 SSE /sse 兼容端点 ──────────────────────────────
+# ── SSE /sse 兼容端点 ─────────────────────────────────
 def test_sse_missing_key_401(client):
     """/sse 端点存在且受 API Key 保护：无 key → 401。"""
     r = client.get("/sse")
@@ -153,7 +152,7 @@ def test_sse_messages_missing_key_401(client):
     assert r.status_code == 401
 
 
-# ── P3.1.5 访问日志 ───────────────────────────────────────
+# ── 访问日志 ──────────────────────────────────────────
 def test_access_log_emitted(client, caplog):
     """每次请求产生一条 access 日志，含 key 前缀与状态。"""
     caplog.set_level(logging.INFO, logger="coursepilot.mcp.gateway")

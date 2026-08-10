@@ -29,6 +29,30 @@ class MCPErrorCode:
     CONFIRMATION_REQUIRED = -32008
 
 
+class MCPError(Exception):
+    """MCP 业务异常基类：携带稳定错误码，供工具层映射为 isError 响应。"""
+
+    code: int = MCPErrorCode.INTERNAL_ERROR
+    """稳定错误码（见 MCPErrorCode）。"""
+
+    def __init__(self, message: str | None = None, *, code: int | None = None):
+        super().__init__(message or ERROR_MESSAGES.get(self.code, "未知错误"))
+        if code is not None:
+            self.code = code
+
+
+class UnauthenticatedError(MCPError):
+    """未认证：请求未携带有效 Principal（未走网关 / Key 无效）。"""
+
+    code = MCPErrorCode.AUTHENTICATION_ERROR
+
+
+class ToolForbiddenError(MCPError):
+    """已认证但无权执行：租户越权或缺少所需 scope。"""
+
+    code = MCPErrorCode.AUTHORIZATION_ERROR
+
+
 ERROR_MESSAGES: dict[int, str] = {
     MCPErrorCode.PARSE_ERROR: "请求 JSON 格式错误，请检查请求体是否为合法 JSON。",
     MCPErrorCode.INVALID_REQUEST: "请求不符合 JSON-RPC 2.0 格式，请检查 jsonrpc/version/id 字段。",

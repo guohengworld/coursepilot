@@ -1,10 +1,10 @@
-"""stdio-to-HTTP 桥接器单元测试（P3.2.1 ~ P3.2.4）。
+"""stdio-to-HTTP 桥接器单元测试。
 
 覆盖：
-- P3.2.1 stdio 读取循环（stdin 行分隔 → stdout）
-- P3.2.2 HTTP 转发（请求体原样 POST 到 Gateway）
-- P3.2.3 API Key header（每请求带 ``Authorization: Bearer <key>``）
-- P3.2.4 响应写回 stdout（与 Gateway 响应一致，不污染 stdout）
+- stdio 读取循环（stdin 行分隔 → stdout）
+- HTTP 转发（请求体原样 POST 到 Gateway）
+- API Key header（每请求带 ``Authorization: Bearer <key>``）
+- 响应写回 stdout（与 Gateway 响应一致，不污染 stdout）
 
 使用 ``httpx.MockTransport`` 注入 mock 客户端，避免真实网络；
 用 ``io.StringIO`` 注入 stdin/stdout，验证行协议与 stdout 纯净性。
@@ -43,7 +43,7 @@ def _make_client(handler, captured: list | None = None):
     return httpx.Client(transport=httpx.MockTransport(_wrap))
 
 
-# ── P3.2.3 API Key header ──────────────────────────────────
+# ── API Key header ──────────────────────────────────────
 def test_forward_adds_authorization_header():
     """每条转发请求都带 ``Authorization: Bearer <api_key>``。"""
     captured: list[httpx.Request] = []
@@ -74,7 +74,7 @@ def test_forward_posts_to_gateway_url():
     assert captured[0].method == "POST"
 
 
-# ── P3.2.2 HTTP 转发（请求体原样）──────────────────────────
+# ── HTTP 转发（请求体原样）─────────────────────────────
 def test_forward_request_body_unchanged():
     """JSON-RPC 请求体原样作为 JSON POST 发出。"""
     captured: list[httpx.Request] = []
@@ -97,7 +97,7 @@ def test_forward_request_body_unchanged():
     assert sent == req
 
 
-# ── P3.2.4 响应写回 stdout（原样透传）───────────────────────
+# ── 响应写回 stdout（原样透传）─────────────────────────
 def test_forward_returns_gateway_response_unchanged():
     """Gateway 响应 dict 原样返回（含 result 字段）。"""
     gateway_resp = {
@@ -193,7 +193,7 @@ def test_forward_network_error_on_notification_returns_none():
     assert resp is None
 
 
-# ── P3.2.1 stdio 读取循环（端到端）─────────────────────────
+# ── stdio 读取循环（端到端）────────────────────────────
 def test_run_bridge_end_to_end():
     """stdin 多行 JSON-RPC → stdout 多行响应，一一对应。"""
     responses = {
@@ -288,7 +288,7 @@ def test_run_bridge_empty_lines_skipped():
     assert len(out_lines) == 1
 
 
-# ── P3.2.1 不污染 stdout ───────────────────────────────────
+# ── 不污染 stdout ──────────────────────────────────────
 def test_run_bridge_stdout_contains_only_jsonrpc_lines():
     """stdout 每一行都是合法 JSON-RPC 响应，无任何诊断信息污染。"""
     def handler(request: httpx.Request) -> httpx.Response:
@@ -319,7 +319,7 @@ def test_run_bridge_closes_owned_client():
     client.close()
 
 
-# ── P3.2.5 打包：入口可导入 ─────────────────────────────────
+# ── 打包：入口可导入 ───────────────────────────────────
 def test_main_entry_point_importable():
     """``coursepilot.mcp.cli.main:main`` 入口可被导入（打包前置条件）。"""
     from coursepilot.mcp.cli.main import main

@@ -103,8 +103,8 @@ def forward_request(
 ) -> dict[str, Any] | None:
     """把单条 JSON-RPC 请求转发到 Gateway，返回响应 dict。
 
-    - 请求带 ``Authorization: Bearer <api_key>`` 头（P3.2.3）。
-    - 请求体原样作为 JSON POST 发出（P3.2.2）。
+    - 请求带 ``Authorization: Bearer <api_key>`` 头。
+    - 请求体原样作为 JSON POST 发出。
     - 通知（无 id）转发后返回 ``None``，不写回 stdout。
     - 网络错误或 Gateway 返回非 JSON 时，构造 JSON-RPC error 响应返回，
       保证调用方对每条带 id 的请求都能拿到一条响应。
@@ -149,7 +149,7 @@ def forward_request(
 
 
 def _write_response(stdout: IO[str], payload: dict[str, Any]) -> None:
-    """把响应以单行 JSON 写回 stdout 并立即 flush（P3.2.4）。
+    """把响应以单行 JSON 写回 stdout 并立即 flush。
 
     行分隔格式与 test_stdio.py 的 stdio 协议一致，便于宿主逐行读取。
     """
@@ -165,7 +165,7 @@ def run_bridge(
     *,
     client: httpx.Client | None = None,
 ) -> None:
-    """stdio 桥接主循环（P3.2.1）。
+    """stdio 桥接主循环。
 
     从 stdin 逐行读取 JSON-RPC，转发到 Gateway，响应写回 stdout。
     所有诊断信息走 stderr，绝不污染 stdout。
@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> None:
     """CLI 入口。
 
     ``--help`` 由 argparse 处理后即退出，不会进入 stdio 循环，
-    因此 ``coursepilot-mcp --help`` 可正常输出用法（P3.2.5 验收）。
+    因此 ``coursepilot-mcp --help`` 可正常输出用法。
 
     Args:
         argv: 命令行参数；为 ``None`` 时读 ``sys.argv[1:]``（正式 CLI 调用）。
