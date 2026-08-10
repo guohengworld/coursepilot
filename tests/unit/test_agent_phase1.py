@@ -190,7 +190,11 @@ class TestGraphStructure:
 # ═══════════════════════════════════════════════════════════════
 
 class TestClassifyIntent:
-    """意图分类 skill，依赖 DeepSeek LLM"""
+    """意图分类 skill，依赖 DeepSeek LLM
+
+    注意：classify_intent 返回 3 元组 (intent, complexity, token_info)
+    （复杂度判断为 Agentic RAG 演进新增，见 agent/skills/classify_intent.py）。
+    """
 
     @pytest.mark.asyncio
     async def test_classify_question(self):
@@ -205,8 +209,9 @@ class TestClassifyIntent:
             client.chat.completions.create = AsyncMock(return_value=completion)
 
             from coursepilot.agent.skills.classify_intent import classify_intent
-            intent, tokens = await classify_intent("什么是二叉树？")
+            intent, complexity, tokens = await classify_intent("什么是二叉树？")
             assert intent == "question"
+            assert complexity == "simple"
             assert tokens == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     @pytest.mark.asyncio
@@ -222,16 +227,18 @@ class TestClassifyIntent:
             client.chat.completions.create = AsyncMock(return_value=completion)
 
             from coursepilot.agent.skills.classify_intent import classify_intent
-            intent, _ = await classify_intent("给我出几道题")
+            intent, complexity, _ = await classify_intent("给我出几道题")
             assert intent == "practice"
+            assert complexity == "simple"
 
     @pytest.mark.asyncio
     async def test_classify_falls_back_to_question_without_api_key(self):
         """无 API key 时回退到 question"""
         with patch("coursepilot.agent.skills.classify_intent.settings.llm_api_key", ""):
             from coursepilot.agent.skills.classify_intent import classify_intent
-            intent, _ = await classify_intent("任何问题")
+            intent, complexity, _ = await classify_intent("任何问题")
             assert intent == "question"
+            assert complexity == "simple"
 
     @pytest.mark.asyncio
     async def test_classify_returns_question_for_invalid_response(self):
@@ -246,8 +253,9 @@ class TestClassifyIntent:
             client.chat.completions.create = AsyncMock(return_value=completion)
 
             from coursepilot.agent.skills.classify_intent import classify_intent
-            intent, _ = await classify_intent("一些请求")
+            intent, complexity, _ = await classify_intent("一些请求")
             assert intent == "question"
+            assert complexity == "simple"
 
     @pytest.mark.asyncio
     async def test_diagnose_intent_recognized(self):
@@ -262,8 +270,9 @@ class TestClassifyIntent:
             client.chat.completions.create = AsyncMock(return_value=completion)
 
             from coursepilot.agent.skills.classify_intent import classify_intent
-            intent, _ = await classify_intent("我哪里掌握得不好")
+            intent, complexity, _ = await classify_intent("我哪里掌握得不好")
             assert intent == "diagnose"
+            assert complexity == "simple"
 
 
 # ═══════════════════════════════════════════════════════════════
