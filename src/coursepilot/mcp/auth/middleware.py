@@ -76,7 +76,8 @@ class AuthenticationMiddleware:
         key = _extract_bearer(scope.get("headers", []))
         info: ApiKeyInfo | None = None
         if key is not None:
-            store = self.key_store or KeyStore.load()
+            # 未显式注入 store 时用进程内单例：首次初始化读 env，之后零 IO
+            store = self.key_store or KeyStore.get_default()
             info = store.lookup(key)
 
         if info is None:

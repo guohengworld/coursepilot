@@ -57,21 +57,40 @@ def _resolve_scopes(role: str, declared: list[str] | None) -> frozenset[str]:
 
 
 class KeyStore:
-    """启动时载入的 API Key 表。
+    """启动时载入的 API Key 表（进程内单例，支持热重载）。
 
     Usage::
 
-        store = KeyStore.load()          # 读环境变量 + settings
+        store = KeyStore.get_default()   # 进程内单例（首次 load）
         info = store.lookup("cp_xxx")    # ApiKeyInfo | None
+        store.reload()                   # 重新载入（新增/吊销 key 生效）
     """
+
+    _default: KeyStore | None = None
 
     def __init__(self, table: dict[str, ApiKeyInfo]):
         self._table = table
 
     @classmethod
+    def get_default(cls) -> KeyStore:
+        """返回进程内单例（首次调用时 load）；供中间件兜底与 /reload 复用。
+
+        与旧 ``gateway/auth.py`` 每次请求 ``os.getenv`` 不同：
+        单例只在首次初始化时读一次环境变量，后续请求零 IO。
+        """
+        if cls._default is None:
+            cls._default = cls.load()
+        return cls._default
+
+    @classmethod
+    def _reset_default(cls) -> None:
+        """清空单例（仅供测试隔离用）。"""
+        cls._default = None
+
+    @classmethod
     def load(cls, *, env_json: str | None = None,
              single_key: str | None = None) -> KeyStore:
-        """从环境变量 / settings 载入 key 表（可扩展 ``/reload`` 重载入口）。
+        """从环境变量 / settings 载入 key 表。
 
         Args:
             env_json: 多 key JSON；默认读 ``COURSEPILOT_MCP_API_KEYS``。
@@ -113,6 +132,15 @@ class KeyStore:
             )
 
         return cls(table)
+
+    def reload(self, *, env_json: str | None = None,
+               single_key: str | None = None) -> None:
+        """原地热重载：重新载入并原子替换内部表（新增/吊销 key 立即生效）。
+
+        替换为不可变语义：先构建新表再整体赋值，避免半更新状态被并发读取。
+        """
+        new_store = self.load(env_json=env_json, single_key=single_key)
+        self._table = new_store._table
 
     def lookup(self, key: str) -> ApiKeyInfo | None:
         """按完整 key 查身份信息；不存在返回 None。"""
