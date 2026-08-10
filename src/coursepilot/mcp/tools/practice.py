@@ -7,21 +7,22 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
-from uuid import UUID
+from datetime import UTC, datetime
 
 from mcp.types import CallToolResult, TextContent
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.agent.skills.generate_quiz import generate_quiz
-from coursepilot.agent.skills.grade_answers import grade_answers as grade_answers_skill
 from coursepilot.db import async_session_factory
+from coursepilot.mcp.auth.policy import (
+    require_scope,
+    require_self_or_privileged,
+)
+from coursepilot.mcp.shared.schemas import GeneratePracticeParams, GradeAnswersParams
 from coursepilot.models import KnowledgePoint, PracticeRecord, Question
 from coursepilot.rag.generator import build_course_context
 from coursepilot.rag.retriever import Retriever
-
-from coursepilot.mcp.shared.schemas import GeneratePracticeParams, GradeAnswersParams
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ async def _find_kp_by_path(
     return fallback.scalar_one_or_none()
 
 
+@require_scope("write")
 async def generate_practice(params: GeneratePracticeParams) -> CallToolResult:
     """基于知识点生成练习题。
 
@@ -127,6 +129,7 @@ async def generate_practice(params: GeneratePracticeParams) -> CallToolResult:
         await session.close()
 
 
+@require_self_or_privileged("teacher", "super")
 async def grade_answers(params: GradeAnswersParams) -> CallToolResult:
     """提交作答并批改。
 
@@ -153,7 +156,7 @@ async def grade_answers(params: GradeAnswersParams) -> CallToolResult:
             question_id=question.id,
             user_answer=params.answer,
             correct_flag=correct,
-            answered_at=datetime.now(timezone.utc),
+            answered_at=datetime.now(UTC),
         )
         session.add(record)
         await session.commit()

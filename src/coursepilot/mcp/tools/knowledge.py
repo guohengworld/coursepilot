@@ -14,10 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.db import async_session_factory
+from coursepilot.mcp.shared.schemas import GetKPTreeParams, SearchKnowledgeUnitsParams
 from coursepilot.models import KnowledgePoint, KnowledgeUnit
 from coursepilot.rag.retriever import Retriever
-
-from coursepilot.mcp.shared.schemas import GetKPTreeParams, SearchKnowledgeUnitsParams
 
 _LOGGER = logging.getLogger(__name__)
 

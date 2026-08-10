@@ -12,15 +12,35 @@ from __future__ import annotations
 
 import json
 import logging
-from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.db import async_session_factory
+from coursepilot.mcp.principal import get_principal
+from coursepilot.mcp.shared.errors import ToolForbiddenError
 from coursepilot.models import Document, KnowledgePoint, KnowledgeUnit
 
 _LOGGER = logging.getLogger(__name__)
+
+# 可读取任意用户数据的角色
+_PRIVILEGED_ROLES = ("teacher", "super")
+
+
+def _assert_tenant_access(user_id: str) -> None:
+    """租户断言：学生只能读自己的数据，teacher/super 可读任意。
+
+    Args:
+        user_id: 目标学生 UUID。
+
+    Raises:
+        ToolForbiddenError: 当前 Principal 非特权角色且目标 user_id 非本人。
+    """
+    p = get_principal()
+    if p.role not in _PRIVILEGED_ROLES and user_id != p.user_id:
+        raise ToolForbiddenError(
+            f"无权访问用户 {user_id} 的数据（当前身份 {p.user_id}）"
+        )
 
 
 async def _get_session() -> AsyncSession:
@@ -124,6 +144,7 @@ async def read_stats(course_id: str) -> str:
 
 async def read_report(user_id: str, course_id: str) -> str:
     """返回学生综合学情报告（MVP 阶段为简化版）。"""
+    _assert_tenant_access(user_id)
     session = await _get_session()
     try:
         # MVP 阶段返回知识点覆盖和文档状态
@@ -152,6 +173,7 @@ async def read_report(user_id: str, course_id: str) -> str:
 
 async def read_mastery(user_id: str, course_id: str) -> str:
     """返回学生掌握度画像（MVP 阶段为简化版）。"""
+    _assert_tenant_access(user_id)
     session = await _get_session()
     try:
         return json.dumps(

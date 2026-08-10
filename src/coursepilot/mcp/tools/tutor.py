@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-from uuid import UUID
 
 from mcp.types import CallToolResult, TextContent
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,14 +15,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from coursepilot.agent.skills.diagnose import diagnose as diagnose_skill
 from coursepilot.agent.skills.review_plan import review_plan as review_plan_skill
 from coursepilot.db import async_session_factory
-from coursepilot.rag.generator import Generator, build_course_context
-from coursepilot.rag.retriever import Retriever
-
+from coursepilot.mcp.auth.policy import (
+    require_scope,
+    require_self_or_privileged,
+)
 from coursepilot.mcp.shared.schemas import (
     DiagnoseParams,
     GetReviewPlanParams,
     QueryKnowledgeParams,
 )
+from coursepilot.rag.generator import Generator, build_course_context
+from coursepilot.rag.retriever import Retriever
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +77,7 @@ async def query_knowledge(params: QueryKnowledgeParams) -> CallToolResult:
         await session.close()
 
 
+@require_self_or_privileged("teacher", "super")
 async def diagnose(params: DiagnoseParams) -> CallToolResult:
     """对学生进行学情诊断。
 
@@ -100,6 +103,8 @@ async def diagnose(params: DiagnoseParams) -> CallToolResult:
         await session.close()
 
 
+@require_self_or_privileged("teacher", "super")
+@require_scope("read")
 async def get_review_plan(params: GetReviewPlanParams) -> CallToolResult:
     """生成并返回学生的复习计划。
 
