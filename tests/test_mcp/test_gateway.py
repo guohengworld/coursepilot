@@ -1,15 +1,14 @@
-"""Gateway 端到端测试：/health、/mcp 鉴权与 tools/list、/sse 兼容端点。
+"""Gateway 端到端测试：/health、/mcp 鉴权与 tools/list、访问日志。
 
-覆盖健康检查、Streamable HTTP /mcp、SSE /sse、API Key 校验端到端、访问日志。
+覆盖健康检查、Streamable HTTP /mcp、API Key 校验端到端、访问日志。
 
-注意：TestClient 的 lifespan 关闭（session_manager 关停）在当前 SDK 版本会
-卡住，故 fixture 调用 ``__enter__`` 启动 lifespan 但不调 ``__exit__``，
-由 pytest 进程退出时统一清理。
+P1-T3 变更：移除 /sse 兼容端点相关用例（SSE 已按规范弃用并从网关删除）；
+fixture 直接使用 SDK app 的自带 lifespan（TestClient 正常 enter/exit）。
 """
 
 import json
-import os
 import logging
+import os
 
 import pytest
 from starlette.testclient import TestClient
@@ -26,25 +25,12 @@ _TOOLS_LIST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
 @pytest.fixture(scope="module")
 def client():
     os.environ["COURSEPILOT_MCP_API_KEYS"] = json.dumps(_VALID_KEYS)
-    from coursepilot.mcp.gateway.main import create_app
+    from coursepilot.mcp.gateway.app import create_app
 
-    app = create_app()
-    c = TestClient(app)
-    c.__enter__()  # 启动 lifespan（session_manager）
+    c = TestClient(create_app())
+    c.__enter__()
     yield c
-    # session_manager 关停在当前 SDK 会卡住，用守护线程带超时关闭，
-    # 超时则放弃（daemon 线程随 pytest 进程退出而终止）。
-    import threading
-
-    def _close():
-        try:
-            c.__exit__(None, None, None)
-        except Exception:
-            pass
-
-    t = threading.Thread(target=_close, daemon=True)
-    t.start()
-    t.join(timeout=5)
+    c.__exit__(None, None, None)
 
 
 # ── 健康检查 ─────────────────────────────────────────────
@@ -139,32 +125,21 @@ def test_mcp_tools_call_invalid_course(client):
     assert "不存在" in result["content"][0]["text"]
 
 
-# ── SSE /sse 兼容端点 ─────────────────────────────────
-def test_sse_missing_key_401(client):
-    """/sse 端点存在且受 API Key 保护：无 key → 401。"""
-    r = client.get("/sse")
-    assert r.status_code == 401
-
-
-def test_sse_messages_missing_key_401(client):
-    """/messages/ 回传端点同样受 API Key 保护。"""
-    r = client.post("/messages/", json={})
-    assert r.status_code == 401
-
-
 # ── 访问日志 ──────────────────────────────────────────
 def test_access_log_emitted(client, caplog):
-    """每次请求产生一条 access 日志，含 key 前缀与状态。"""
+    """成功请求产生 access 日志，含 key 前缀、tool 名与状态。
+
+    401 由 AuthenticationMiddleware（logger=coursepilot.mcp.auth）记录，
+    gateway logger 仅记录鉴权通过的成功请求。
+    """
     caplog.set_level(logging.INFO, logger="coursepilot.mcp.gateway")
-    client.post("/mcp", json=_TOOLS_LIST)  # 401
     client.post(
         "/mcp",
         json=_TOOLS_LIST,
         headers={"Authorization": "Bearer cp_test1234"},
     )  # 200
     access_lines = [r.message for r in caplog.records if r.message.startswith("access")]
-    assert len(access_lines) >= 2
-    # 有效 key 那条应含脱敏前缀与 tool 名
+    assert len(access_lines) >= 1
     ok_line = next(line for line in access_lines if "cp_tes" in line)
     assert "tools/list" in ok_line
     assert "status=200" in ok_line
