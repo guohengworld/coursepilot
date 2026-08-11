@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-v4-flash"
     llm_base_url: str = "https://api.deepseek.com"
     llm_temperature: float = 0.3
+    # LLM 请求超时（秒）：防止上游网络挂起导致事件循环被阻塞
+    # （实测：无 timeout 时 DeepSeek 挂起会让 MCP gateway 所有请求排队超时）
+    llm_timeout: float = 60.0
 
     # ── MiMO Judge ─────────────────────────────────────
     mimo_api_key: str = ""
@@ -90,6 +93,14 @@ class Settings(BaseSettings):
             "MCP_API_KEY",
         ),
     )  # MVP 阶段轻量认证
+    mcp_api_keys: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            # 多 key 表（JSON 对象：key → {user_id, role, scopes}），
+            # 供 KeyStore.load() 读取；优先级高于 COURSEPILOT_MCP_API_KEY 单 key
+            "COURSEPILOT_MCP_API_KEYS",
+        ),
+    )
     mcp_host: str = "0.0.0.0"
     mcp_port: int = 8080
     mcp_protocol_version: str = "2025-06-18"

@@ -6,8 +6,10 @@
 import json
 import logging
 from uuid import UUID
+
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from coursepilot.config import settings
 from coursepilot.models import ReviewPlan
 
@@ -48,7 +50,7 @@ async def review_plan(
                 "plan_summary": "暂无薄弱知识点，无需复习计划", "plan_id": ""}, empty_tokens
 
     if settings.llm_api_key:
-        client = AsyncOpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+        client = AsyncOpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url, timeout=settings.llm_timeout)
         stats_text = "\n".join(
             f"{kp}: {s['correct']}/{s['total']} 正确率 {s['rate']:.0%}"
             for kp, s in kp_stats.items() if kp in weak_kps

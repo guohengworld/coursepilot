@@ -5,7 +5,9 @@ temperature=0.1 区别于 generate_quiz 的 0.7，模拟"不同审查视角"
 """
 import json
 import logging
+
 from openai import AsyncOpenAI
+
 from coursepilot.config import settings
 
 logger = logging.getLogger(__name__)
@@ -50,7 +52,9 @@ async def evaluate_quiz(
         return {"status": "FAIL", "score": 0.0,
                 "feedback": {"suggestions": ["题目为空"]}}, empty_tokens
 
-    client = AsyncOpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+    client = AsyncOpenAI(api_key=settings.llm_api_key,
+                         base_url=settings.llm_base_url,
+                         timeout=settings.llm_timeout)
     response = await client.chat.completions.create(
         model=settings.llm_model,
         messages=[

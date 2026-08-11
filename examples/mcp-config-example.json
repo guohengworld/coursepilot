@@ -1,11 +1,11 @@
 {
   "mcpServers": {
     "coursepilot": {
-      "command": "python",
+      "command": "f:/all-projs/coursepilot/.venv/Scripts/python.exe",
       "args": ["-m", "coursepilot.mcp.cli"],
       "env": {
         "COURSEPILOT_MCP_GATEWAY": "http://127.0.0.1:8080/mcp",
-        "COURSEPILOT_MCP_API_KEY": "your_api_key_here"
+        "COURSEPILOT_MCP_API_KEY": "cp_test1234"
       }
     }
   }

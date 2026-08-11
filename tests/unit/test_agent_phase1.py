@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -126,15 +126,18 @@ class TestGraphStructure:
 
     def test_graph_linear_edges_in_builder(self):
         """检查 builder 注册了正确的边"""
-        from langgraph.graph import StateGraph, START, END
+        from langgraph.graph import END, START, StateGraph
+
         from coursepilot.agent.state import AgentState
 
         builder = StateGraph(AgentState)
 
         with patch.object(builder, "add_edge") as mock_add_edge:
             from coursepilot.agent.nodes import (
-                build_context_node, classify_node,
-                finalize_node, query_rag_node,
+                build_context_node,
+                classify_node,
+                finalize_node,
+                query_rag_node,
             )
 
             builder.add_node("build_context", build_context_node)
@@ -166,6 +169,7 @@ class TestGraphStructure:
     async def test_build_agent_graph_uses_async_postgres_saver(self):
         """build_agent_graph 使用 AsyncPostgresSaver 作为 checkpointer"""
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
         from coursepilot.agent.graph import _get_saver
 
         saver = await _get_saver()
@@ -542,7 +546,6 @@ class TestContextBuilder:
         long_qa.answer = "x" * 500
         long_qa.kp_path = ""
 
-        from unittest.mock import PropertyMock
 
         result = MagicMock()
         result.scalar_one_or_none.return_value = None
@@ -602,7 +605,10 @@ class TestNodes:
         """classify_node → intent 被设置"""
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
-            patch("coursepilot.agent.nodes.classify_intent", return_value=("question", ZERO_TOKENS)),
+            patch(
+                "coursepilot.agent.nodes.classify_intent",
+                return_value=("question", ZERO_TOKENS),
+            ),
         ):
             from coursepilot.agent.nodes import classify_node
 
@@ -668,8 +674,10 @@ class TestNodes:
             "sources": [{"kp_path": "OS/进程调度"}],
             "retrieved_metadata": {"source_kp_paths": ["OS/进程调度"]},
             "llm_calls": [
-                {"node": "classify", "total_tokens": 15, "prompt_tokens": 10, "completion_tokens": 5},
-                {"node": "query_rag", "total_tokens": 50, "prompt_tokens": 30, "completion_tokens": 20},
+                {"node": "classify", "total_tokens": 15,
+                 "prompt_tokens": 10, "completion_tokens": 5},
+                {"node": "query_rag", "total_tokens": 50,
+                 "prompt_tokens": 30, "completion_tokens": 20},
             ],
         })
 
@@ -683,6 +691,11 @@ class TestNodes:
 
         assert result["token_count"] == 65  # 15 + 50
         assert result["error"] is None
+        # session_id 有效时应写入 QA 记录（含 token 汇总）
+        mock_uq.assert_awaited_once()
+        kwargs = mock_uq.await_args.kwargs
+        assert kwargs["session_id"] == sample_state["session_id"]
+        assert kwargs["token_count"] == 65
 
     @pytest.mark.asyncio
     async def test_build_context_node_propagates_error(self, sample_state, mock_asf):
@@ -736,9 +749,10 @@ class TestAgentAPI:
     @pytest.fixture
     def client(self, mock_db):
         from fastapi.testclient import TestClient
-        from coursepilot.main import app
-        from coursepilot.db import get_session
+
         from coursepilot.api.deps import get_current_user
+        from coursepilot.db import get_session
+        from coursepilot.main import app
         from coursepilot.models import User
 
         test_user = User(
@@ -763,13 +777,16 @@ class TestAgentAPI:
     @pytest.fixture
     def mock_graph(self):
         """用 MemorySaver 编译测试图，替换 _graph_app"""
-        from langgraph.graph import StateGraph, START, END
         from langgraph.checkpoint.memory import MemorySaver
-        from coursepilot.agent.state import AgentState
+        from langgraph.graph import END, START, StateGraph
+
         from coursepilot.agent.nodes import (
-            build_context_node, classify_node,
-            query_rag_node, finalize_node,
+            build_context_node,
+            classify_node,
+            finalize_node,
+            query_rag_node,
         )
+        from coursepilot.agent.state import AgentState
 
         builder = StateGraph(AgentState)
         builder.add_node("build_context", build_context_node)
@@ -838,9 +855,9 @@ class TestAgentAPI:
 
     def test_approve_endpoint(self, client, mock_db, mock_graph):
         """审批端点返回 200 + resumed（Phase 3 RBAC + human-in-loop）"""
-        from coursepilot.models import AgentSession, User
         from coursepilot.api.deps import get_current_user
         from coursepilot.main import app
+        from coursepilot.models import AgentSession, User
 
         teacher_id = uuid4()
         teacher = User(id=teacher_id, username="teacher", role="teacher")
@@ -878,13 +895,16 @@ class TestEndToEnd:
     @pytest.mark.asyncio
     async def test_full_workflow_returns_answer(self, mock_asf):
         """ainvoke 全路径 → 最终状态含 answer、sources"""
-        from langgraph.graph import StateGraph, START, END
         from langgraph.checkpoint.memory import MemorySaver
-        from coursepilot.agent.state import AgentState
+        from langgraph.graph import END, START, StateGraph
+
         from coursepilot.agent.nodes import (
-            build_context_node, classify_node,
-            query_rag_node, finalize_node,
+            build_context_node,
+            classify_node,
+            finalize_node,
+            query_rag_node,
         )
+        from coursepilot.agent.state import AgentState
 
         builder = StateGraph(AgentState)
         builder.add_node("build_context", build_context_node)
@@ -937,7 +957,9 @@ class TestEndToEnd:
             )
             mock_uq.return_value = 30
 
-            result = await graph.ainvoke(initial_state, {"configurable": {"thread_id": str(uuid4())}})
+            result = await graph.ainvoke(
+                initial_state, {"configurable": {"thread_id": str(uuid4())}}
+            )
 
         assert result["error"] is None
         assert result["intent"] == "question"
@@ -948,13 +970,16 @@ class TestEndToEnd:
     @pytest.mark.asyncio
     async def test_workflow_handles_node_error(self, mock_asf):
         """build_context_node 失败 → 返回空 context，但下游节点仍正常执行"""
-        from langgraph.graph import StateGraph, START, END
         from langgraph.checkpoint.memory import MemorySaver
-        from coursepilot.agent.state import AgentState
+        from langgraph.graph import END, START, StateGraph
+
         from coursepilot.agent.nodes import (
-            build_context_node, classify_node,
-            query_rag_node, finalize_node,
+            build_context_node,
+            classify_node,
+            finalize_node,
+            query_rag_node,
         )
+        from coursepilot.agent.state import AgentState
 
         builder = StateGraph(AgentState)
         builder.add_node("build_context", build_context_node)
@@ -989,8 +1014,14 @@ class TestEndToEnd:
 
         with (
             patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
-            patch("coursepilot.agent.nodes.build_context_logic", side_effect=RuntimeError("模拟错误")),
-            patch("coursepilot.agent.nodes.classify_intent", return_value=("question", ZERO_TOKENS)),
+            patch(
+                "coursepilot.agent.nodes.build_context_logic",
+                side_effect=RuntimeError("模拟错误"),
+            ),
+            patch(
+                "coursepilot.agent.nodes.classify_intent",
+                return_value=("question", ZERO_TOKENS),
+            ),
             patch("coursepilot.agent.nodes.query_rag") as mock_qr,
             patch("coursepilot.agent.nodes.update_qa_record") as mock_uq,
         ):
@@ -1013,6 +1044,7 @@ class TestAgentState:
 
     def test_required_fields_present(self):
         from typing import get_type_hints
+
         from coursepilot.agent.state import AgentState
 
         hints = get_type_hints(AgentState)
@@ -1029,6 +1061,7 @@ class TestAgentState:
     def test_optional_fields(self):
         """error 字段应为 Optional[str]"""
         from typing import get_type_hints
+
         from coursepilot.agent.state import AgentState
 
         hints = get_type_hints(AgentState)

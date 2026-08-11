@@ -100,6 +100,7 @@ async def decompose_query(
         client = AsyncOpenAI(
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url,
+            timeout=settings.llm_timeout,
         )
         response = await client.chat.completions.create(
             model=settings.llm_model,

@@ -85,6 +85,7 @@ class SummaryBridge:
         client = openai.AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
+            timeout=settings.llm_timeout,
         )
 
         semaphore = asyncio.Semaphore(self.max_concurrent)

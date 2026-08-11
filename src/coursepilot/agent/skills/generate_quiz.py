@@ -5,7 +5,9 @@ generate_quiz_node 调用，结果存入 state["quiz_data"]
 """
 import json
 import logging
+
 from openai import AsyncOpenAI
+
 from coursepilot.config import settings
 
 logger = logging.getLogger(__name__)
@@ -58,7 +60,7 @@ async def generate_quiz(
         f"\n教材内容：\n{context[:3000]}",
     ]
 
-    client = AsyncOpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+    client = AsyncOpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url, timeout=settings.llm_timeout)
     response = await client.chat.completions.create(
         model=settings.llm_model,
         messages=[

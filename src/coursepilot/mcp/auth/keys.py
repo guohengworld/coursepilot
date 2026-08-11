@@ -98,8 +98,11 @@ class KeyStore:
         """
         table: dict[str, ApiKeyInfo] = {}
 
-        raw = env_json if env_json is not None else os.getenv(
-            "COURSEPILOT_MCP_API_KEYS", "")
+        # 多 key JSON：优先进程环境变量（测试/运维注入），兜底 settings
+        # （settings 从 .env 加载，保证 Start-Process/服务化启动也能读到）
+        raw = env_json if env_json is not None else (
+            os.getenv("COURSEPILOT_MCP_API_KEYS") or settings.mcp_api_keys
+        )
         if raw.strip():
             try:
                 data = json.loads(raw)

@@ -114,7 +114,8 @@ class Generator:
 
         client = openai.AsyncOpenAI(
             api_key=self.api_key,
-            base_url=self.base_url
+            base_url=self.base_url,
+            timeout=settings.llm_timeout,
         )
 
         response = await client.chat.completions.create(
@@ -185,7 +186,8 @@ class Generator:
 
         client = openai.AsyncOpenAI(
             api_key=self.api_key,
-            base_url=self.base_url
+            base_url=self.base_url,
+            timeout=settings.llm_timeout,
         )
 
         stream = await client.chat.completions.create(

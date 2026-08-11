@@ -56,7 +56,8 @@ class QueryRewriter:
 
         client = openai.AsyncOpenAI(
             api_key=self.api_key,
-            base_url=self.base_url
+            base_url=self.base_url,
+            timeout=settings.llm_timeout,
         )
         prompt = REWRITE_PROMPT.format(query=query)
 

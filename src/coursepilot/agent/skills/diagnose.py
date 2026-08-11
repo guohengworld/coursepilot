@@ -7,12 +7,13 @@
 import json
 import logging
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 from uuid import UUID
 
 from openai import AsyncOpenAI
-from sqlalchemy import Integer, and_, func as sa_func, select
+from sqlalchemy import Integer, and_, select
+from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.config import settings
@@ -91,7 +92,7 @@ async def diagnose(
         PracticeRecord.correct_flag.isnot(None),
     ]
     if _lookback:
-        since = datetime.now(timezone.utc) - timedelta(days=_lookback)
+        since = datetime.now(UTC) - timedelta(days=_lookback)
         filters.append(PracticeRecord.answered_at >= since)
 
     t0 = time.perf_counter()
@@ -226,6 +227,7 @@ async def generate_llm_analysis(
     client = AsyncOpenAI(
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
+        timeout=settings.llm_timeout,
     )
     try:
         response = await client.chat.completions.create(
