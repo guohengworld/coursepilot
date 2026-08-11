@@ -1,6 +1,6 @@
 # CoursePilot
 
-> 面向学校课程的 AI 教学助手 —— 用 LangGraph 编排教学工作流，Agentic RAG 提供精准知识检索，MCP 协议将教学能力开放给任意 IDE 与客户端。适用于任意学科。
+> （个人学习项目）面向学校课程的 AI 教学助手 —— 用 LangGraph 编排教学工作流，Agentic RAG 提供精准知识检索，MCP 协议将教学能力开放给任意 IDE 与客户端。适用于任意学科。
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue)
 ![LangGraph](https://img.shields.io/badge/LangGraph-1.0-green)
