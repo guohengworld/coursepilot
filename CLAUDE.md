@@ -38,13 +38,14 @@ PYTHONPATH=src .venv/Scripts/python -m scripts.batch_ingest
 .venv/Scripts/ruff format --check src/ tests/
 
 # 启动数据库（PostgreSQL）
-docker compose up -d
-docker compose down
+# 本项目开发环境直连本机 PostgreSQL（无需 docker）；
+# 如需容器化，可改用：docker compose up -d   /   docker compose down
 
-# RAGAS 评估
-PYTHONPATH=src EMBEDDING_MODEL_PATH="F:/all-projs/models/bge-m3" .venv/Scripts/python -m eval.eval_ragas baseline
-PYTHONPATH=src EMBEDDING_MODEL_PATH="F:/all-projs/models/bge-m3" .venv/Scripts/python -m eval.eval_ragas grid --stage 1
-PYTHONPATH=src EMBEDDING_MODEL_PATH="F:/all-projs/models/bge-m3" .venv/Scripts/python -m eval.eval_ragas compare
+# RAGAS 评估（EMBEDDING_MODEL_PATH 设为 HF 模型 id 或你本地的模型路径；
+# 不设置时取 config.py 默认值，换机器前请先覆盖）
+PYTHONPATH=src EMBEDDING_MODEL_PATH="<本地路径 或 BAAI/bge-m3>" .venv/Scripts/python -m eval.eval_ragas baseline
+PYTHONPATH=src EMBEDDING_MODEL_PATH="<本地路径 或 BAAI/bge-m3>" .venv/Scripts/python -m eval.eval_ragas grid --stage 1
+PYTHONPATH=src EMBEDDING_MODEL_PATH="<本地路径 或 BAAI/bge-m3>" .venv/Scripts/python -m eval.eval_ragas compare
 
 # Alembic 数据库迁移
 alembic revision --autogenerate -m "描述信息"
@@ -133,7 +134,7 @@ CoursePilot 是一个面向学校课程的 AI 教学助手。后端技术栈：F
 易错配置（默认值可能误导）：
 
 - `LLM_MODEL` 默认 `deepseek-v4-flash`。
-- 本地模型路径硬编码在 `config.py`：`F:/all-projs/models/bge-m3`、`F:/all-projs/models/bge-reranker-v2-m3`。
+- 嵌入/重排模型默认路径在 `config.py` 中写死为作者本机绝对路径；换机器前须用 `EMBEDDING_MODEL_PATH` / `RERANKER_MODEL_PATH` 覆盖为 HF 模型 id（如 `BAAI/bge-m3`，自动下载）或本地路径。
 - MCP API key 双别名：`COURSEPILOT_MCP_API_KEY`（优先）/ 旧别名 `MCP_API_KEY`。
 - `main.py` 在任何 torch import 前设置 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`，勿移动该行。
 
