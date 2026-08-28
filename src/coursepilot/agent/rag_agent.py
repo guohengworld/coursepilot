@@ -465,7 +465,7 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[:max_chars] + f"\n...（已截断，原始 {len(text)} 字符）"
 
 
-# ── 工具执行器（方案 §5：包装现有技能，零重写） ────────────
+# ── 工具执行器（包装现有技能，零重写） ────────────
 async def _retrieve_textbook(
     query: str,
     course_id: str,
@@ -605,7 +605,7 @@ async def _tool_memory_recall(args: dict, state: dict, evidence: EvidenceRegistr
 
 
 async def evaluate_multidim(query: str, context: str) -> dict[str, Any]:
-    """P2.1 五维证据质量评估（覆盖/一致性/时效/权威/完整）。
+    """五维证据质量评估（覆盖/一致性/时效/权威/完整）。
 
     LLM 无 API key 或解析失败时返回空 dict（由调用方决定降级展示）。
     """
@@ -660,7 +660,7 @@ async def _tool_evaluate_context(args: dict, state: dict, evidence: EvidenceRegi
     if result.get("uncovered_aspects"):
         lines.append(f"未覆盖方面：{'；'.join(result['uncovered_aspects'])}")
 
-    # P2.1: 五维评分（无 key / 失败时静默省略该段，不阻塞主结论）
+    # 五维评分（无 key / 失败时静默省略该段，不阻塞主结论）
     multidim = await evaluate_multidim(question, evidence_text)
     if multidim:
         labels = {
@@ -776,7 +776,7 @@ async def dispatch_tool(tool_name: str, args: dict, state: dict,
         return f"错误：工具 {tool_name} 执行失败（{e}）。请改写查询或换用其他工具。"
 
 
-# ── 闭环契约出口（方案 §6.4） ─────────────────────────────
+# ── 闭环契约出口 ─────────────────────────────
 async def finalize_answer(
     state: dict[str, Any],
     *,
@@ -837,7 +837,7 @@ async def finalize_answer(
     }
 
 
-# ── ReAct 循环入口节点（方案 §6.2） ───────────────────────
+# ── ReAct 循环入口节点 ───────────────────────
 async def agentic_rag_node(state: dict[str, Any]) -> dict[str, Any]:
     """Agentic RAG 入口节点：LLM 自主决策的 ReAct 循环。
 
@@ -869,7 +869,7 @@ async def agentic_rag_node(state: dict[str, Any]) -> dict[str, Any]:
             forced_stop = True
             break
 
-        # P2.2: token 预算用掉一半且证据未压缩时，harness 自动压缩早期证据
+        # token 预算用掉一半且证据未压缩时，harness 自动压缩早期证据
         await _maybe_auto_summarize(messages, guard, evidence)
 
         try:
@@ -899,7 +899,7 @@ async def agentic_rag_node(state: dict[str, Any]) -> dict[str, Any]:
 
         messages.append(message)  # assistant 的 tool_calls 必须回传
 
-        # P2.3: 先统一解析 + guardrail 校验，再并发执行合法的工具调用
+        # 先统一解析 + guardrail 校验，再并发执行合法的工具调用
         prepared: list[tuple[Any, str, dict, str | None]] = []
         for call in message.tool_calls:
             fn = call.function

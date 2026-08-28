@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 HUMAN_REVIEW_INTENTS = {"practice", "review"}
 
 async def build_context_node(state: dict) -> dict:
-    """构建上下文：课程信息 + 学生画像 + 最近问答"""
+    """构建上下文：课程信息（KP数+教材名） + 学生画像 + 最近问答"""
     try:
         async with async_session_factory() as session:
             course_ctx, profile, recent_qa = await build_context_logic(

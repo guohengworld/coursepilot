@@ -1,7 +1,7 @@
-"""条件路由函数（Phase 2 启用）。
+"""条件路由函数。
 
 提供 4 个路由函数供 graph.py 的条件边使用：
-  - route_by_intent: classify 后分发（P1 增强：complex question → agentic_rag）
+  - route_by_intent: classify 后分发
   - route_after_rag: query_rag / agentic_rag 后分发
   - route_after_evaluate: evaluate_quiz 后分发（含重试逻辑）
   - route_after_review: human_review 后分发
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 def route_by_intent(state: dict) -> str:
     """classify 节点后根据 intent + complexity 路由
 
-    P1：复杂问题（complex question）走 Agentic RAG 节点（LLM 自主决策），
+    复杂问题（complex question）走 Agentic RAG 节点（LLM 自主决策），
     简单问题走快速通道（query_rag）。
 
     Returns:
