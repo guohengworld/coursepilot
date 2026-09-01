@@ -39,7 +39,7 @@ from coursepilot.agent.routing import (
     route_after_review,
     route_by_intent,
 )
-from coursepilot.agent.state import AgentState
+from coursepilot.agent.state import AgentState, InputState, OutputState
 from coursepilot.config import settings
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,13 @@ async def build_agent_graph():
 
     :returns: CompiledStateGraph: 可直接调用 .ainvoke() 的编译图
     """
-    builder = StateGraph(AgentState)
+    # 三 schema：AgentState 为节点可见的完整数据面，
+    # InputState / OutputState 仅在图的入口与出口生效（过滤输入、约束输出）。
+    builder = StateGraph(
+        AgentState,
+        input_schema=InputState,
+        output_schema=OutputState,
+    )
 
     # 注册节点
     builder.add_node("build_context", build_context_node)
