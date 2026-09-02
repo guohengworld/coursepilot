@@ -10,6 +10,7 @@ from uuid import UUID
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from coursepilot.agent.state_models import ReviewPlanData
 from coursepilot.config import settings
 from coursepilot.models import ReviewPlan
 
@@ -65,7 +66,9 @@ async def review_plan(
             temperature=0.3,
             response_format={"type": "json_object"},
         )
-        plan_data = json.loads(response.choices[0].message.content)
+        plan_data = ReviewPlanData.model_validate(
+            json.loads(response.choices[0].message.content)
+        ).model_dump()
         usage = response.usage
         token_info = {
             "prompt_tokens": usage.prompt_tokens if usage else 0,

@@ -16,6 +16,7 @@ from sqlalchemy import Integer, and_, select
 from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from coursepilot.agent.state_models import DiagnosisAnalysis, validation_error_brief
 from coursepilot.config import settings
 from coursepilot.models import KnowledgePoint, PracticeRecord, Question
 
@@ -252,12 +253,12 @@ async def generate_llm_analysis(
             logger.warning("generate_llm_analysis: 模型返回空")
             return "", "", token_info
 
-        result = json.loads(content)
+        result = DiagnosisAnalysis.model_validate(json.loads(content)).model_dump()
         return (
             result.get("analysis", ""),
             result.get("recommendations", ""),
             token_info,
         )
     except (json.JSONDecodeError, Exception) as e:
-        logger.warning("generate_llm_analysis 失败: %s", e)
+        logger.warning("generate_llm_analysis 失败: %s", validation_error_brief(e))
         return "", "", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

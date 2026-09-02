@@ -7,8 +7,9 @@ import json
 import logging
 
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
-from coursepilot.agent.state_models import EVAL_FALLBACK
+from coursepilot.agent.state_models import EVAL_FALLBACK, EvalResult, validation_error_brief
 from coursepilot.config import settings
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,10 @@ async def evaluate_quiz(
         "total_tokens": usage.total_tokens if usage else 0,
     }
     try:
-        return json.loads(content), token_info
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("evaluate_quiz: 解析审核结果失败，默认 PASS")
+        return EvalResult.model_validate(json.loads(content)).model_dump(), token_info
+    except (json.JSONDecodeError, TypeError, ValidationError) as e:
+        logger.warning(
+            "evaluate_quiz: 解析审核结果失败或结构校验失败，默认 PASS（%s）",
+            validation_error_brief(e),
+        )
         return dict(EVAL_FALLBACK), token_info

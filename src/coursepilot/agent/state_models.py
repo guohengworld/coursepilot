@@ -8,8 +8,9 @@ state 运行时值仍保持 dict（见 state.py 中字段注解为 dict 的原�
 LangGraph 不会对 TypedDict 字段做运行时校验，模型实例会让下游
 state.get(...) 失效并放大 checkpoint 序列化体积。
 
-在 LLM 解析点显式接入 model_validate 属于行为变更，由后续独立提交处理；
-本模块当前不承担任何运行时校验职责。
+在 LLM 解析点显式接入 model_validate（提交 2b）时，由各 skill 在 json.loads
+之后调用对应模型的 model_validate + model_dump；本模块提供
+validation_error_brief 用于日志摘要，不直接参与 state 写入。
 
 ## 划分判据
 
@@ -26,7 +27,7 @@ evidence）保持 list[dict] 注解——它们不跨越信任边界，静态检
 """
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 # ── 受控枚举：LLM 产出但直接决定控制流 ──────────────────────────────
@@ -164,3 +165,22 @@ EVAL_FALLBACK: dict[str, Any] = {
     "score": 0.8,
     "feedback": {"suggestion": ["审核结果解析失败"]},
 }
+
+
+# ── 校验辅助 ──────────────────────────────────────────────────────
+# 供 skill 层在 LLM 解析点接入 model_validate 时打印日志摘要，
+# 避免 pydantic 的多行错误对象刷屏。
+
+def validation_error_brief(e: Exception) -> str:
+    """把校验/解析异常压缩为单行日志摘要。
+
+    对 ValidationError 取首个错误的 loc+msg；其他异常截断 str。
+    返回值只用于日志，不参与控制流。
+    """
+    if isinstance(e, ValidationError):
+        errs = e.errors()
+        if errs:
+            first = errs[0]
+            loc = ".".join(str(x) for x in first.get("loc", ()))
+            return f"{loc}: {first.get('msg', '')}"
+    return str(e)[:200]

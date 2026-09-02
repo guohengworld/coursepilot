@@ -7,8 +7,9 @@ import json
 import logging
 
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
-from coursepilot.agent.state_models import QUIZ_FALLBACK
+from coursepilot.agent.state_models import QUIZ_FALLBACK, QuizData, validation_error_brief
 from coursepilot.config import settings
 
 logger = logging.getLogger(__name__)
@@ -79,10 +80,10 @@ async def generate_quiz(
         "total_tokens": usage.total_tokens if usage else 0,
     }
     try:
-        return json.loads(content), token_info
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("generate_quiz: LLM 返回非 JSON，回退空结果")
+        return QuizData.model_validate(json.loads(content)).model_dump(), token_info
+    except (json.JSONDecodeError, TypeError, ValidationError) as e:
+        logger.warning(
+            "generate_quiz: LLM 返回非 JSON 或结构校验失败，回退空结果（%s）",
+            validation_error_brief(e),
+        )
         return dict(QUIZ_FALLBACK), token_info
-
-
-
