@@ -42,6 +42,7 @@ class InputState(TypedDict):
     query: str                      # 用户原始消息（ChatRequest.message）
     course_id: str                  # 课程 ID(UUID 字符串)
     user_id: str                    # 用户 ID(UUID 字符串)
+    user_role: str                  # 认证用户角色（student/teacher/super），图外鉴权层确定
     session_id: str                 # agent_sessions.id
 
     # 会话记忆恢复（api/agent.py 从 DB 读取后装配）
