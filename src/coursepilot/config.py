@@ -109,6 +109,13 @@ class Settings(BaseSettings):
     diagnose_weak_threshold: float = 0.6   # 正确率低于此值视为薄弱
     diagnose_lookback_days: int = 90       # 分析最近 N 天的做题记录
 
+    # ── 编排层 · 子图隔离（机制 3，Strangler Fig 渐进切换） ──
+    # True = 用独立子图；False = 沿用原节点函数（默认，行为零变化）
+    orch_subgraph_diagnose: bool = False
+    orch_subgraph_question: bool = False
+    orch_subgraph_practice: bool = False
+    orch_subgraph_review: bool = False
+
     # ── Token 计价（仅内部成本估算，非用户定价） ────────
     token_cost_per_1k_input: float = 0.0005   # 每千输入 token 成本（元）
     token_cost_per_1k_output: float = 0.0015  # 每千输出 token 成本（元）

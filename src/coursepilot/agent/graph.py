@@ -11,6 +11,17 @@ P1 拓扑（复杂问题走 Agentic RAG，CRAG 补搜循环已删除）：
       ├─ agentic_rag → [route_after_rag] → (同上)   # complex question：LLM 自主 ReAct 循环
       ├─ get_mastery → query_rag → (同上)
       └─ diagnose → finalize → END
+
+机制 3 子图隔离（Strangler Fig 渐进切换，flag 默认 False 行为零变化）：
+    - orch_subgraph_diagnose=True  → diagnose 抽为子图
+    - orch_subgraph_question=True → query_rag/agentic_rag 抽为 question 子图
+      （classify 分发到 "question"，复杂度分发移入子图内部）
+    - orch_subgraph_practice=True → get_mastery→query_rag→generate_quiz→evaluate_quiz→
+      create_plan 抽为 practice 子图（重试循环移入子图内部）
+    - orch_subgraph_review=True   → 同 practice，末步换成 review_plan
+
+四个 flag 相互独立：任一相关 flag 关闭，对应旧节点/旧边即保留。旧节点是否保留
+由 need_* 布尔推导（见 build_agent_graph 开头），保证单开任一 flag 时拓扑仍连通。
 """
 import logging
 
@@ -40,6 +51,12 @@ from coursepilot.agent.routing import (
     route_by_intent,
 )
 from coursepilot.agent.state import AgentState, InputState, OutputState
+from coursepilot.agent.subgraphs import (
+    build_diagnose_subgraph,
+    build_practice_subgraph,
+    build_question_subgraph,
+    build_review_subgraph,
+)
 from coursepilot.config import settings
 
 logger = logging.getLogger(__name__)
@@ -80,72 +97,124 @@ async def build_agent_graph():
         output_schema=OutputState,
     )
 
-    # 注册节点
+    # 机制 3 flag 本地快照（避免多次读 settings，且便于推导旧节点去留）
+    sg_diagnose = settings.orch_subgraph_diagnose
+    sg_question = settings.orch_subgraph_question
+    sg_practice = settings.orch_subgraph_practice
+    sg_review = settings.orch_subgraph_review
+
+    # 旧节点是否仍需保留（任一依赖它的 flag 关闭即保留）
+    # query_rag 供 question（simple）与 practice/review（get_mastery 后检索）共用
+    need_query_rag = (not sg_question) or (not sg_practice) or (not sg_review)
+    # get_mastery/generate_quiz/evaluate_quiz 是 practice/review 旧链路的共享前缀
+    need_practice_chain = (not sg_practice) or (not sg_review)
+    need_create_plan = not sg_practice
+    need_review_plan = not sg_review
+
+    # ── 注册节点 ──────────────────────────────────────
     builder.add_node("build_context", build_context_node)
     builder.add_node("classify", classify_node)
-    builder.add_node("query_rag", query_rag_node)
-    builder.add_node("get_mastery", get_mastery_node)
-    builder.add_node("generate_quiz", generate_quiz_node)
-    builder.add_node("evaluate_quiz", evaluate_quiz_node)
-    builder.add_node("create_plan", create_plan_node)
-    builder.add_node("diagnose", diagnose_node)
-    builder.add_node("review_plan", review_plan_node)
     builder.add_node("finalize", finalize_node)
     builder.add_node("human_review", human_review_node)
-    # P1: Agentic RAG 节点（complex question：LLM 自主决策的 ReAct 循环）
-    builder.add_node("agentic_rag", agentic_rag_node)
+    # 诊断：子图 or 节点函数
+    builder.add_node(
+        "diagnose",
+        build_diagnose_subgraph() if sg_diagnose else diagnose_node,
+    )
+    # 问答：question 子图 or agentic_rag 节点（query_rag 单独按需注册）
+    if sg_question:
+        builder.add_node("question", build_question_subgraph())
+    else:
+        builder.add_node("agentic_rag", agentic_rag_node)
+    # 练习 / 复习：子图 or 旧链路节点
+    if sg_practice:
+        builder.add_node("practice", build_practice_subgraph())
+    if sg_review:
+        builder.add_node("review", build_review_subgraph())
+    if need_query_rag:
+        builder.add_node("query_rag", query_rag_node)
+    if need_practice_chain:
+        builder.add_node("get_mastery", get_mastery_node)
+        builder.add_node("generate_quiz", generate_quiz_node)
+        builder.add_node("evaluate_quiz", evaluate_quiz_node)
+    if need_create_plan:
+        builder.add_node("create_plan", create_plan_node)
+    if need_review_plan:
+        builder.add_node("review_plan", review_plan_node)
 
+    # ── 连接边 ────────────────────────────────────────
     builder.add_edge(START, "build_context")
     builder.add_edge("build_context", "classify")
 
-    # 条件边: classify → intent + complexity 分发
-    builder.add_conditional_edges("classify", route_by_intent, {
-        "query_rag": "query_rag",
-        "agentic_rag": "agentic_rag",
-        "get_mastery": "get_mastery",
-        "diagnose": "diagnose",
+    # classify → intent + complexity 分发
+    classify_targets = {
         "human_review": "human_review",
-    })
+        "diagnose": "diagnose",
+    }
+    if sg_question:
+        classify_targets["question"] = "question"
+    else:
+        classify_targets["query_rag"] = "query_rag"
+        classify_targets["agentic_rag"] = "agentic_rag"
+    builder.add_conditional_edges("classify", route_by_intent, classify_targets)
 
-    # human_review 批准后继续
-    builder.add_conditional_edges("human_review", route_after_review, {
-        "get_mastery": "get_mastery",
-        "finalize": "finalize",
-    })
+    # human_review → 审批后进 practice/review 子图 or 旧 get_mastery
+    review_targets = {"finalize": "finalize"}
+    if sg_practice:
+        review_targets["practice"] = "practice"
+    if sg_review:
+        review_targets["review"] = "review"
+    if need_practice_chain:
+        review_targets["get_mastery"] = "get_mastery"
+    builder.add_conditional_edges("human_review", route_after_review, review_targets)
 
-    # get_mastery → 始终进 query_rag 获取教材内容
-    builder.add_edge("get_mastery", "query_rag")
-
-    # query_rag → 按 intent 决定是否继续出题
-    builder.add_conditional_edges("query_rag", route_after_rag, {
-        "generate_quiz": "generate_quiz",
-        "finalize": "finalize",
-    })
-
-    # agentic_rag → 与 query_rag 一致：按 intent 决定是否继续出题
-    builder.add_conditional_edges("agentic_rag", route_after_rag, {
-        "generate_quiz": "generate_quiz",
-        "finalize": "finalize",
-    })
-
-    # generate_quiz → evaluate_quiz（固定边）
-    builder.add_edge("generate_quiz", "evaluate_quiz")
-
-    # evaluate_quiz → 重试 / 继续
-    builder.add_conditional_edges("evaluate_quiz", route_after_evaluate, {
-        "generate_quiz": "generate_quiz",
-        "review_plan": "review_plan",
-        "create_plan": "create_plan",
-        "finalize": "finalize",
-    })
-
-    # create_plan → finalize（固定边）
-    builder.add_edge("create_plan", "finalize")
-    # review_plan → finalize（固定边）
-    builder.add_edge("review_plan", "finalize")
-    # diagnose → finalize（固定边）
+    # diagnose → finalize
     builder.add_edge("diagnose", "finalize")
-    # finalize → END
+
+    # 问答出口：question 子图 → finalize；agentic_rag → 按是否仍有旧链路决定出口
+    if sg_question:
+        builder.add_edge("question", "finalize")
+    elif need_practice_chain:
+        builder.add_conditional_edges("agentic_rag", route_after_rag, {
+            "generate_quiz": "generate_quiz",
+            "finalize": "finalize",
+        })
+    else:
+        # practice/review 已抽子图，agentic_rag 只服务 complex question
+        builder.add_edge("agentic_rag", "finalize")
+
+    # 旧 practice/review 链路（任一 flag 关闭时）
+    if need_practice_chain:
+        builder.add_edge("get_mastery", "query_rag")
+        builder.add_edge("generate_quiz", "evaluate_quiz")
+        eval_targets = {"generate_quiz": "generate_quiz", "finalize": "finalize"}
+        if need_create_plan:
+            eval_targets["create_plan"] = "create_plan"
+        if need_review_plan:
+            eval_targets["review_plan"] = "review_plan"
+        builder.add_conditional_edges("evaluate_quiz", route_after_evaluate, eval_targets)
+    if need_create_plan:
+        builder.add_edge("create_plan", "finalize")
+    if need_review_plan:
+        builder.add_edge("review_plan", "finalize")
+
+    # query_rag 出口：question（收口）或旧 practice/review（继续出题）
+    if need_query_rag:
+        if need_practice_chain:
+            builder.add_conditional_edges("query_rag", route_after_rag, {
+                "generate_quiz": "generate_quiz",
+                "finalize": "finalize",
+            })
+        else:
+            # practice/review 已抽子图，query_rag 只服务 simple question
+            builder.add_edge("query_rag", "finalize")
+
+    # practice / review 子图 → finalize
+    if sg_practice:
+        builder.add_edge("practice", "finalize")
+    if sg_review:
+        builder.add_edge("review", "finalize")
+
     builder.add_edge("finalize", END)
 
     # checkpointer：AsyncPostgresSaver

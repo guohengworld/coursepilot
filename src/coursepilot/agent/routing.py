@@ -8,6 +8,7 @@
 """
 import logging
 
+from coursepilot.config import settings
 from coursepilot.rag.config import config as rag_config
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ def route_by_intent(state: dict) -> str:
         "human_review" — 需要审批的路径
         "get_mastery"  — practice / review（需要掌握度）
         "diagnose"     — diagnose
+        "question"     — question（子图隔离开启后，复杂度分发移入子图）
         "agentic_rag"  — complex question（LLM 自主 ReAct 循环）
         "query_rag"    — simple question（快速通道）
     """
@@ -34,19 +36,30 @@ def route_by_intent(state: dict) -> str:
     elif intent == "diagnose":
         return "diagnose"          # 诊断只读，无需审批
     elif intent == "question":
+        if settings.orch_subgraph_question:
+            return "question"      # 子图接管，复杂度分发移入子图
         if complexity == "complex" and rag_config.enable_routing:
             return "agentic_rag"   # 复杂 → LLM 自主决策
         return "query_rag"         # 简单 → 快速通道
-    return "query_rag"
+    # intent 未识别：按简单问答兜底
+    return "question" if settings.orch_subgraph_question else "query_rag"
 
 
 def route_after_review(state: dict) -> str:
-    """human_review 节点后的路由"""
+    """human_review 节点后的路由
+
+    审批通过后按 intent 分发：
+      - practice → "practice" 子图（flag 开启）或 "get_mastery" 旧链路
+      - review   → "review" 子图（flag 开启）或 "get_mastery" 旧链路
+      - rejected / 其他 → 收口 finalize
+    """
     if state.get("human_review_result") == "rejected":
         return "finalize"
     intent = state.get("intent", "")
-    if intent in ("practice", "review"):
-        return "get_mastery"
+    if intent == "practice":
+        return "practice" if settings.orch_subgraph_practice else "get_mastery"
+    if intent == "review":
+        return "review" if settings.orch_subgraph_review else "get_mastery"
     return "finalize"
 
 
