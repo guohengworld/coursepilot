@@ -8,6 +8,7 @@ import logging
 
 from openai import AsyncOpenAI
 
+from coursepilot.agent.state_models import EVAL_FALLBACK
 from coursepilot.config import settings
 
 logger = logging.getLogger(__name__)
@@ -77,5 +78,4 @@ async def evaluate_quiz(
         return json.loads(content), token_info
     except (json.JSONDecodeError, TypeError):
         logger.warning("evaluate_quiz: 解析审核结果失败，默认 PASS")
-        return {"status": "PASS", "score": 0.8,
-                "feedback": {"suggestion": ["审核结果解析失败"]}}, token_info
+        return dict(EVAL_FALLBACK), token_info

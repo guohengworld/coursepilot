@@ -8,6 +8,7 @@ import logging
 
 from openai import AsyncOpenAI
 
+from coursepilot.agent.state_models import QUIZ_FALLBACK
 from coursepilot.config import settings
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ async def generate_quiz(
         ({"questions": [...]}, token_info)
     """
     if not settings.llm_api_key:
-        return {"questions": []}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        return dict(QUIZ_FALLBACK), {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     weak_kps = mastery.get("weak_kps", [])
     focus_hint = ""
@@ -81,7 +82,7 @@ async def generate_quiz(
         return json.loads(content), token_info
     except (json.JSONDecodeError, TypeError):
         logger.warning("generate_quiz: LLM 返回非 JSON，回退空结果")
-        return {"questions": []}, token_info
+        return dict(QUIZ_FALLBACK), token_info
 
 
 

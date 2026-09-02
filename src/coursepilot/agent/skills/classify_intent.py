@@ -9,6 +9,7 @@ import logging
 
 from openai import AsyncOpenAI
 
+from coursepilot.agent.state_models import VALID_COMPLEXITIES, VALID_INTENTS
 from coursepilot.config import settings
 
 logger = logging.getLogger(__name__)
@@ -129,15 +130,13 @@ async def classify_intent(
             raw_complexity = result.get("complexity", "").strip().lower()
             raw_reasoning = result.get("reasoning", "")
 
-            valid_intents = {"question", "practice", "diagnose", "review", "none"}
-            valid_complexities = {"simple", "complex"}
-
-            if raw_intent in valid_intents:
+            # 取值集合与 state_models 的 Intent / Complexity 契约同源
+            if raw_intent in VALID_INTENTS:
                 intent = raw_intent
             else:
                 logger.warning("classify_intent 无效意图 %r，降级为 question", raw_intent)
 
-            if raw_complexity in valid_complexities:
+            if raw_complexity in VALID_COMPLEXITIES:
                 complexity = raw_complexity
             else:
                 logger.warning("classify_intent 无效复杂度 %r，降级为 simple", raw_complexity)

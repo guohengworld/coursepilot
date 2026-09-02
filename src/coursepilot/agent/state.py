@@ -20,6 +20,14 @@ AgentState（完整数据面），Input/Output 只在图的入口与出口生效
 「传了但没进图」的静默丢字段。当前 InputState 与 api/agent.py 的
 initial_state 完全对齐，其中的节点产物类字段属于历史遗留的启动占位，
 后续应作为独立的契约收窄提交处理，不混进本次重构。
+
+嵌套字段的结构契约见 state_models.py：那里为 LLM 产出的字段
+（quiz_data / eval_result / diagnosis / review_plan）定义了 Pydantic 模型，
+仅作结构与类型提示用，本模块不承担运行时校验（在写入点接入校验
+属后续独立提交，当前尚未发生）。这里的注解保持 dict——因为运行时值
+必须是 dict，否则下游 70 余处 state.get(...) 会失效、checkpoint
+序列化体积也会显著变大。注解与运行时不一致比没有注解更危险，
+故不把字段类型写成模型类。
 """
 from typing import TypedDict
 
@@ -47,7 +55,9 @@ class InputState(TypedDict):
     course_context: dict            # {name, textbook, chapters} 供 System Prompt
     user_profile: dict | None       # 学生画像概要（若有）
     recent_qa: list[dict]           # 最近 5 条问答
-    intent: str                     # question / practice / diagnose / review
+    # 取值集合与 state_models.Intent / Complexity 同源，写入点已做白名单校验；
+    # 未分类时为 ""（UNCLASSIFIED），不计入 Literal。
+    intent: str                     # question / practice / diagnose / review / none
     complexity: str                 # simple / complex（Agentic RAG 智能路由）
     context: str                    # RAG 检索到的教材上下文（XML 格式）
     retrieved_metadata: dict        # {query_raw, query_rewritten, source_kp_paths, ...}
@@ -95,19 +105,19 @@ class AgentState(InputState, OutputState):
     注意：本类不描述图拓扑、节点连接关系或子图划分——那些由 graph.py
     的 add_node / add_edge / add_conditional_edges 定义。
     """
-    # 掌握度
+    # 掌握度（DB 聚合，结构由代码固定）
     mastery: dict                   # get_mastery 输出: {"mastery_level": {...}, "weak_kps": [...]}
 
-    # 练习
-    quiz_data: dict                 # generate_quiz 输出: {"questions": [...]}
-    eval_result: dict               # evaluate_quiz 输出
-    retry_count: int                # evaluate 重试计数器（0/1/2）
+    # 练习（LLM 产出，结构契约见 state_models.QuizData）
+    quiz_data: dict                 # {"questions": [QuizQuestion]}
+    eval_result: dict               # EvalResult: {"status", "score", "feedback"}
+    retry_count: int                # evaluate 重试计数器
 
-    # 诊断
-    diagnosis: dict                 # diagnose 输出
+    # 诊断（DB 聚合 + LLM 分析，结构契约见 state_models.DiagnosisReport）
+    diagnosis: dict
 
-    # 复习计划
-    review_plan: dict               # review_plan 输出
+    # 复习计划（LLM 产出 + skill 回填 plan_id，见 state_models.ReviewPlanData）
+    review_plan: dict
 
     # Agentic RAG（LLM 自主决策循环的决策轨迹）
     agent_steps: list[dict]         # Agent 决策轨迹: [{tool, args}]

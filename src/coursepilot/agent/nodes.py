@@ -19,6 +19,7 @@ from coursepilot.agent.skills.get_mastery import get_mastery
 from coursepilot.agent.skills.query_rag import query_rag
 from coursepilot.agent.skills.review_plan import review_plan
 from coursepilot.agent.skills.update_qa_record import update_qa_record
+from coursepilot.agent.state_models import QUIZ_FALLBACK
 from coursepilot.db import async_session_factory
 from coursepilot.models import AgentSession, User
 from coursepilot.rag.config import config as rag_config
@@ -428,7 +429,7 @@ async def generate_quiz_node(state: dict) -> dict:
         return {"quiz_data": quiz_data, "llm_calls": llm_calls, "error": None}
     except Exception as e:
         logger.exception("generate_quiz_node 异常")
-        return {"quiz_data": {"question": [], "error": str(e)}}
+        return {"quiz_data": dict(QUIZ_FALLBACK), "error": str(e)}
 
 async def evaluate_quiz_node(state: dict) -> dict:
     """验证练习题质量 → state["eval_result"]，同时递增 retry_count"""
@@ -453,14 +454,15 @@ async def evaluate_quiz_node(state: dict) -> dict:
         logger.exception("evaluate_quiz_node 异常")
         return {
             "eval_result": {"status": "FAIL", "score": 0.0},
-            "retry_count": state.get("retry_state", 0) + 1,
+            "retry_count": state.get("retry_count", 0) + 1,
             "error": str(e),
         }
 
 async def create_plan_node(state: dict) -> dict:
     """practice 路径终点：将生成的 quiz 写入 answer，准备返回给用户"""
     quiz_data = state.get("quiz_data", {})
-    questions = quiz_data.get("questions", {})
+    # 默认值为 []：questions 缺失时与 {} 都是空，但类型应与实际结构一致
+    questions = quiz_data.get("questions", [])
     answer_parts = [f"为你生成了 {len(questions)} 道练习题：\n"]
     for i, q in enumerate(questions, 1):
         opts = "\n".join(f"  {k}. {v}" for k, v in q.get("options", {}).items())
