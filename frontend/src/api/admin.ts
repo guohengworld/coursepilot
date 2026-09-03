@@ -1,9 +1,29 @@
 import { request } from './index'
 
+export interface MemoryLayerStats {
+  embedding_coverage: number
+  facts_coverage: number
+  qa_total: number
+  [key: string]: unknown
+}
+
+export interface RecallResultItem {
+  query: string
+  answer: string
+  scores: {
+    score: number
+    recency: number
+    relevance: number
+    importance: number
+    [key: string]: unknown
+  }
+  [key: string]: unknown
+}
+
 export interface MemoryDashboardResponse {
   course_id: string
   course_stats: Record<string, unknown>
-  memory_layer_stats: Record<string, unknown>
+  memory_layer_stats: MemoryLayerStats
   recent_sessions: Record<string, unknown>[]
 }
 
@@ -21,7 +41,7 @@ export interface SessionMemoryResponse {
 
 export interface MemoryRecallResponse {
   query: string
-  results: Record<string, unknown>[]
+  results: RecallResultItem[]
 }
 
 export function getMemoryDashboard(courseId: string, days: number = 7) {

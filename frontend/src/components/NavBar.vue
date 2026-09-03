@@ -13,6 +13,7 @@ const menuItems = [
   { path: '/knowledge-points', icon: 'Share', label: '知识点树' },
   { path: '/rag-qa', icon: 'ChatLineSquare', label: 'RAG 问答' },
   { path: '/agent', icon: 'MagicStick', label: 'Agent 对话' },
+  { path: '/tasks', icon: 'Tickets', label: '任务中心' },
   { path: '/api-console', icon: 'Tools', label: 'API 控制台' },
   ...(auth.isSuperuser ? [{ path: '/admin/memory', icon: 'Cpu', label: '记忆层控制台' }] : []),
 ]

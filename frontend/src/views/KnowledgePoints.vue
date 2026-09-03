@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { getCourses, getDocuments, getKnowledgePoints } from '@/api/courses'
 import type { Course, Document, KnowledgePoint } from '@/types'
 
@@ -56,6 +57,9 @@ async function loadDocuments() {
   const res = await getDocuments(selectedCourseId.value)
   if (res.ok && Array.isArray(res.data)) {
     documents.value = res.data as Document[]
+  } else if (res.status === 403) {
+    documents.value = []
+    ElMessage.warning('您不是该课程的成员，无法查看课程资料')
   }
 }
 
@@ -68,6 +72,9 @@ async function loadKnowledgePoints() {
   )
   if (res.ok && Array.isArray(res.data)) {
     flatNodes.value = res.data as KnowledgePoint[]
+  } else if (res.status === 403) {
+    flatNodes.value = []
+    ElMessage.warning('您不是该课程的成员，无法查看知识点')
   }
   loading.value = false
 }

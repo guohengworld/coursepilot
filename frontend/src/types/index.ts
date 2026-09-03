@@ -139,7 +139,6 @@ export interface QuizQuestion {
   options: Record<string, string>
   kp_path: string
 }
-
 export interface QuizResponse {
   session_id: string
   questions: QuizQuestion[]
@@ -171,4 +170,69 @@ export interface ApiResult<T> {
   ok: boolean
   status: number
   data: T | ApiError
+}
+
+// ===== Tasks（⑤ 教师发布任务，schema 与后端 api/tasks.py 对齐） =====
+export interface TaskGoal {
+  metric?: string
+  description?: string
+  [key: string]: unknown
+}
+
+export interface TaskGroup {
+  kp_path: string
+  kp_name: string
+  question_count: number
+  difficulty: number
+  source: string | null
+  reason: string | null
+}
+
+export interface TaskAcceptance {
+  pass_condition?: string
+  fallback_action?: string | null
+  [key: string]: unknown
+}
+
+export interface TaskDiagnosis {
+  mastery_level?: Record<string, unknown>
+  weak_kps?: string[]
+  common_mistakes?: unknown[]
+  avg_correct_rate?: number | null
+  class_rank?: string | null
+  [key: string]: unknown
+}
+
+export type TaskStatus = 'draft' | 'published'
+
+export interface TaskListItem {
+  id: string
+  course_id: string
+  student_id: string
+  status: TaskStatus
+  goal: TaskGoal
+  total_count: number
+  time_limit_minutes: number | null
+  created_at: string
+  updated_at: string
+  published_at: string | null
+}
+
+export interface TaskDetail extends TaskListItem {
+  created_by: string
+  diagnosis: TaskDiagnosis
+  groups: TaskGroup[]
+  acceptance: TaskAcceptance
+}
+
+export interface TaskCandidate {
+  user_id: string
+  username: string
+}
+
+export interface TaskDraftUpdate {
+  goal?: TaskGoal | null
+  groups?: TaskGroup[] | null
+  time_limit_minutes?: number | null
+  acceptance?: TaskAcceptance | null
 }

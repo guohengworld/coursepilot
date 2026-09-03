@@ -22,6 +22,7 @@ const quickActions = [
   { title: '知识点树', desc: '浏览知识点结构', path: '/knowledge-points', icon: 'Share', color: '#67c23a' },
   { title: 'RAG 问答', desc: '基于教材内容提问', path: '/rag-qa', icon: 'ChatLineSquare', color: '#e6a23c' },
   { title: 'Agent 对话', desc: 'AI 智能教学助手', path: '/agent', icon: 'MagicStick', color: '#9b59b6' },
+  { title: '任务中心', desc: '布置 / 领取 AI 任务', path: '/tasks', icon: 'Tickets', color: '#2f8f6f' },
   { title: 'API 控制台', desc: '测试所有 API 端点', path: '/api-console', icon: 'Tools', color: '#f56c6c' },
 ]
 </script>

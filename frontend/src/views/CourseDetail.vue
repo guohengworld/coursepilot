@@ -31,7 +31,14 @@ async function loadCourse() {
   if (res.ok && !('detail' in res.data)) {
     course.value = res.data as Course
   } else {
-    ElMessage.error('课程不存在')
+    // ② 归属校验：非本课程成员一律 403（后端不区分"不存在/无权"，避免泄露课程存在性）
+    if (res.status === 403) {
+      ElMessage.warning(
+        '您不是该课程的成员，无法访问（如需访问请联系课程教师将你加入课程）',
+      )
+    } else {
+      ElMessage.error('课程不存在或已删除')
+    }
     router.push('/courses')
     return
   }
@@ -42,6 +49,9 @@ async function loadDocuments() {
   const res = await getDocuments(courseId)
   if (res.ok && Array.isArray(res.data)) {
     documents.value = res.data as Document[]
+  } else if (res.status === 403) {
+    documents.value = []
+    ElMessage.warning('您不是该课程的成员，无法查看课程资料')
   }
   docLoading.value = false
 }
@@ -134,6 +144,14 @@ function onUploadChange(file: any) {
         <el-button @click="router.push(`/agent?courseId=${courseId}`)">
           <el-icon><MagicStick /></el-icon> Agent 对话
         </el-button>
+        <el-button
+          v-if="auth.isTeacher"
+          type="primary"
+          plain
+          @click="router.push(`/tasks?courseId=${courseId}`)"
+        >
+          <el-icon><Tickets /></el-icon> 布置任务
+        </el-button>
       </el-space>
     </el-card>
 
@@ -143,7 +161,7 @@ function onUploadChange(file: any) {
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <span>文档管理</span>
           <el-button
-            v-if="auth.isSuperuser"
+            v-if="auth.isTeacher"
             type="primary"
             size="small"
             @click="uploadVisible = true"

@@ -39,7 +39,7 @@ api.interceptors.response.use(
 )
 
 export async function request<T>(
-  method: 'GET' | 'POST' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   data?: unknown,
   options?: { headers?: Record<string, string>; timeout?: number },
@@ -48,7 +48,7 @@ export async function request<T>(
     const response: AxiosResponse<T> = await api.request({
       method,
       url: path,
-      data: method === 'POST' ? data : undefined,
+      data: method === 'POST' || method === 'PUT' ? data : undefined,
       ...options,
     })
     return { ok: true, status: response.status, data: response.data }
@@ -111,3 +111,11 @@ export {
   askQuestion,
 } from './courses'
 export { chat, getSession, listSessions, approveSession, deleteSession } from './agent'
+export {
+  getTasks,
+  getTaskCandidates,
+  createTaskDraft,
+  getTask,
+  updateTask,
+  publishTask,
+} from './tasks'

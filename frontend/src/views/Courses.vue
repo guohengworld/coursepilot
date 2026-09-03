@@ -66,7 +66,7 @@ onMounted(loadCourses)
   <div class="page-container">
     <div class="page-header">
       <h2>课程管理</h2>
-      <el-button v-if="auth.isSuperuser" type="primary" @click="dialogVisible = true">
+      <el-button v-if="auth.isTeacher" type="primary" @click="dialogVisible = true">
         <el-icon><Plus /></el-icon> 创建课程
       </el-button>
     </div>
