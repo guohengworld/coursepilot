@@ -6,7 +6,7 @@ HITL 审批（approve 端点 / waiting_human 状态）已随 commit ③ 移除�
 """
 import asyncio
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.agent.graph import build_agent_graph
-from coursepilot.api.deps import get_current_user
+from coursepilot.api.deps import get_current_user, require_course_member
 from coursepilot.db import async_session_factory, get_session
 from coursepilot.governance.guardrails import guard_token_limit
 from coursepilot.models import AgentSession, DiagnosisReport, User
@@ -161,9 +161,17 @@ async def chat(
         config = {"configurable": {"thread_id": thread_id}}
     else:
         # ── 创建新会话 ──
+        # ② 课程归属校验：course_id 来自请求体，必须确认用户属于该课程，
+        # 否则可传别课 id 读别课资料库 / 在别课名下写自己的学情数据。
+        try:
+            cid = UUID(request.course_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="course_id 不是合法的 UUID") from None
+        await require_course_member(session, current_user, cid)
+
         agent_session = AgentSession(
             user_id=current_user.id,
-            course_id=UUID(request.course_id),
+            course_id=cid,
             query=request.message,
             intent="pending",
             status="processing",
@@ -173,7 +181,7 @@ async def chat(
 
         initial_state = {
             "query": request.message,
-            "course_id": request.course_id,
+            "course_id": str(cid),
             "user_id": str(current_user.id),
             "user_role": current_user.role,
             "session_id": str(agent_session.id),
@@ -270,10 +278,10 @@ async def get_session_status(
 
     # 检测处理超时：若会话 processing 超过 5 分钟，自动标记为 failed
     if agent_session.status == "processing":
-        stale_threshold = datetime.now(timezone.utc) - timedelta(seconds=300)
+        stale_threshold = datetime.now(UTC) - timedelta(seconds=300)
         updated_at = agent_session.updated_at
         if updated_at.tzinfo is None:
-            updated_at = updated_at.replace(tzinfo=timezone.utc)
+            updated_at = updated_at.replace(tzinfo=UTC)
         if updated_at < stale_threshold:
             agent_session.status = "failed"
             agent_session.intent = "error"

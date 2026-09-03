@@ -801,12 +801,32 @@ class TestAgentAPI:
         builder.add_edge("finalize", END)
         return builder.compile(checkpointer=MemorySaver())
 
-    def test_chat_returns_202(self, client, mock_graph, mock_asf):
-        """POST /agent/chat → 202 Accepted + session_id"""
+    def test_chat_returns_202(self, client, mock_graph, mock_asf, mock_db):
+        """POST /agent/chat → 202（归属校验：mock 该生是课程 student 成员）"""
         import coursepilot.api.agent as agent_mod
         saved = agent_mod._graph_app
         try:
             agent_mod._graph_app = mock_graph
+
+            # ② 归属校验要求 execute 命中 enrollments，否则 403。
+            # 这里替换 mock_db.execute：enrollments 查询返回 role=student 的行，
+            # 其余查询返回等价默认结果（None / []）。
+            class _FakeEnrollment:
+                role = "student"
+
+            _member = MagicMock()
+            _member.scalar_one_or_none.return_value = _FakeEnrollment()
+            _empty = MagicMock()
+            _empty.scalar_one_or_none.return_value = None
+            _empty.scalars.return_value = _empty
+            _empty.all.return_value = []
+
+            async def _guarded_execute(stmt, *a, **kw):
+                if "enrollments" in str(stmt).lower():
+                    return _member
+                return _empty
+
+            mock_db.execute = _guarded_execute
 
             with (
                 patch("coursepilot.agent.nodes.async_session_factory", return_value=mock_asf),
@@ -848,6 +868,20 @@ class TestAgentAPI:
             json={"message": "", "course_id": str(uuid4())},
         )
         assert response.status_code == 422
+
+    def test_chat_403_not_course_member(self, client, mock_graph):
+        """新会话 chat：course_id 非本课程成员 → 403（mock_db 无归属命中）"""
+        import coursepilot.api.agent as agent_mod
+        saved = agent_mod._graph_app
+        try:
+            agent_mod._graph_app = mock_graph
+            response = client.post(
+                "/api/v1/agent/chat",
+                json={"message": "你好", "course_id": str(uuid4())},
+            )
+        finally:
+            agent_mod._graph_app = saved
+        assert response.status_code == 403
 
     def test_get_session_not_found(self, client):
         """不存在的会话 → 404"""

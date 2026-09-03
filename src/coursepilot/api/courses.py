@@ -17,7 +17,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from coursepilot.api.deps import get_current_user, require_superuser, require_teacher
+from coursepilot.api.deps import (
+    get_current_user,
+    require_course_member,
+    require_course_teacher,
+    require_superuser,
+    require_teacher,
+)
 from coursepilot.db import async_session_factory, get_session
 from coursepilot.models import Course, Document, KnowledgePoint, KnowledgeUnit, User, UserProfile
 from coursepilot.rag.vector_store import VectorStore
@@ -72,8 +78,10 @@ class AskResponse(BaseModel):
     source_kp_paths: list[str] = Field(description="知识点路径列表")
     citation_map: dict[str, dict] = Field(
         default_factory=dict,
-        description='引用 id → 真实来源映射 {ref_id: {"uuid", "kp_path", "page_ref"}}，'
-                    "与回答中 <ref id=\"N\" /> 一一对应，供前端校验引用真实性（不依赖列表顺序推断）",
+        description=(
+            '引用 id → 真实来源映射 {ref_id: {"uuid", "kp_path", "page_ref"}}，'
+            '与回答中 <ref id="N" /> 一一对应，供前端校验引用真实性（不依赖列表顺序推断）'
+        ),
     )
 
 
@@ -130,9 +138,10 @@ async def create_course(
 async def get_course(
     course_id: UUID,
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    """获取课程详情"""
+    """获取课程详情（② 归属校验：仅本课程成员可见）"""
+    await require_course_member(session, user, course_id)
     course = await _get_course_or_404(session, course_id)
     return CourseOut(
         id=str(course.id),
@@ -215,8 +224,9 @@ async def upload_file(
             detail=f"不支持的文件格式: .{ext}，仅支持 pdf/docx/md",
         )
 
-    # 2. 校验课程存在
+    # 2. 校验课程存在 + ② 归属校验（课程教师级：防止把资料传进别人的课程）
     course = await _get_course_or_404(session, course_id)
+    await require_course_teacher(session, user, course_id)
 
     # 3. 保存文件
     content = await file.read()
@@ -253,9 +263,10 @@ async def upload_file(
 async def list_documents(
     course_id: UUID,
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> list[DocumentOut]:
-    """获取某课程下的资料列表"""
+    """获取某课程下的资料列表（② 归属校验：仅本课程成员可见）"""
+    await require_course_member(session, user, course_id)
     await _get_course_or_404(session, course_id)
     result = await session.execute(
         select(Document).where(Document.course_id == course_id).order_by(Document.created_at.desc())
@@ -319,13 +330,15 @@ async def delete_document(
 async def get_knowledge_points(
     course_id: UUID,
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
     document_id: UUID | None = None,
 ) -> list[dict]:
     """获取课程的知识点树（扁平列表，含 parent_id 便于前端渲染）
 
     可选参数 document_id：传入则只返回该文档的 KPs；不传则返回全部（兼容原有行为）。
+    ② 归属校验：仅本课程成员可见。
     """
+    await require_course_member(session, user, course_id)
     query = (
         select(KnowledgePoint)
         .where(KnowledgePoint.course_id == course_id)
@@ -374,6 +387,8 @@ async def ask_course(
     from coursepilot.rag.logger import QueryLogger
     from coursepilot.rag.retriever import Retriever
 
+    # ② 归属校验：防止任意用户对陌生课程做 RAG 检索（读别课资料库）
+    await require_course_member(session, user, course_id)
     await _get_course_or_404(session, course_id)
 
     qlogger = QueryLogger()
@@ -436,6 +451,8 @@ async def ask_course_stream(
     from coursepilot.rag.generator import Generator, build_course_context
     from coursepilot.rag.retriever import Retriever
 
+    # ② 归属校验：与同步 ask 一致，防止对陌生课程做 RAG 检索
+    await require_course_member(session, user, course_id)
     await _get_course_or_404(session, course_id)
 
     retriever = Retriever()
