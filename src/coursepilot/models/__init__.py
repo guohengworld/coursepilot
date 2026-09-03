@@ -17,6 +17,7 @@ from coursepilot.models.audit_log import AuditLog
 from coursepilot.models.course import Course
 from coursepilot.models.diagnosis_report import DiagnosisReport
 from coursepilot.models.document import Document
+from coursepilot.models.enrollment import Enrollment
 from coursepilot.models.eval_metric import EvalMetric
 from coursepilot.models.knowledge_point import KnowledgePoint
 from coursepilot.models.knowledge_unit import KnowledgeUnit
@@ -38,6 +39,7 @@ __all__ = [
     "PracticeRecord",
     "DiagnosisReport",
     "ReviewPlan",
+    "Enrollment",
     "EvalMetric",
     "AgentSession",
     "UserProfile",
