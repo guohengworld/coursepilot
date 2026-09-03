@@ -2,7 +2,9 @@
 
 每个节点接收 AgentState，返回状态更新字典（只写自己负责的字段）
 """
+import asyncio
 import logging
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -24,6 +26,18 @@ from coursepilot.models import AgentSession
 from coursepilot.rag.config import config as rag_config
 
 logger = logging.getLogger(__name__)
+
+# 后台任务强引用登记：asyncio 只持有弱引用，裸 create_task 可能在事件循环
+# 某次迭代后被 GC（尤其任务尚未 await 完成时），导致副作用静默丢失。
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro: Any) -> asyncio.Task:
+    """登记强引用启动后台任务；完成后经 done_callback 自动移出集合。"""
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
 
 async def build_context_node(state: dict) -> dict:
     """构建上下文：课程信息（KP数+教材名） + 学生画像 + 最近问答"""
@@ -175,7 +189,7 @@ async def query_rag_node(state: dict) -> dict:
 
 
 async def finalize_node(state: dict) -> dict:
-    """持久化 + 会话更新 + 滚动摘要 + 异步触发 profile_updater
+    """持久化 + 会话更新 + 滚动摘要 + 异步副作用（④ 拆分后仅做职责编排）
 
     Phase 3 增强：
       - 汇总 llm_calls 写入真实 token 计数和成本估算
@@ -183,179 +197,229 @@ async def finalize_node(state: dict) -> dict:
       - 末尾异步触发 profile_updater.update_profile()
     """
     try:
-        # 汇总所有 LLM 调用的 token 用量
+        # 汇总所有 LLM 调用的 token 用量（供 QA 记录与 P5 快照）
         llm_calls = state.get("llm_calls", [])
         total_tokens = sum(c.get("total_tokens", 0) for c in llm_calls)
         total_prompt = sum(c.get("prompt_tokens", 0) for c in llm_calls)
         total_completion = sum(c.get("completion_tokens", 0) for c in llm_calls)
 
-        answer = state.get("answer", "")
+        # Step A: guardrails（纯计算，事务前；异常则整体失败，与旧序一致）
+        guard_issues = _run_guardrails(state)
 
-        # Step A: Guardrails 检查
-        from coursepilot.governance.guardrails import guard_answer
-        guard_issues = guard_answer(
-            answer=answer,
-            context=state.get("context", ""),
-            sources=state.get("sources", []),
+        # Step C/D(+滚动压缩)/E: 唯一主事务（QA 记录 / 会话状态 / 诊断报告）
+        compaction_count = await _persist_core(
+            state, llm_calls, total_tokens, total_prompt, total_completion,
         )
-        if guard_issues:
-            logger.warning(f"Guardrail 警告: {guard_issues}")
 
-        async with async_session_factory() as session:
-            # ── Step B: Audit 日志（独立 session 但复用同一个也可） ──
-            from coursepilot.governance.audit import (
-                log_action,
-                log_agent_chat,
-                log_guardrail_violation,
-            )
+        # Step F: 异步 audit 日志（不阻塞，不强等）
+        _spawn_audit_tasks(state, guard_issues)
 
-            # ── Step C: 写入 QA Record（仅有效会话；路由兜底跳过） ──
-            # fallback_reason 非空 = 本轮是兜底引导（none/未知/降级收口），
-            # update_qa_record 会触发 embedding + importance 计算，对引导文案
-            # 无意义；Step D 的会话状态更新仍须保留。
-            is_fallback = bool(state.get("fallback_reason"))
-            session_id = state.get("session_id", "")
-            if session_id and not is_fallback:
-                await update_qa_record(
-                    session=session,
-                    user_id=state["user_id"],
-                    course_id=state["course_id"],
-                    query=state["query"],
-                    answer=state.get("answer", ""),
-                    kp_path=_first_kp_path(state.get("retrieved_metadata", {})),
-                    retrieved_units=state.get("retrieved_metadata", {}).get("top_uuids", []),
-                    citations=state.get("sources", []),
-                    session_id=session_id,
-                    token_count=total_tokens,
-                    prompt_tokens=total_prompt,
-                    completion_tokens=total_completion,
-                )
+        # Step G/H/I: 异步副作用（profile 更新 / L3 抽取 / QA embedding 补全）
+        _spawn_side_effects(state)
 
-            # ── Step D: 更新会话状态（含 L1/L2 记忆，仅在 session_id 有效时） ──
-            agent_session = None
-            if session_id:
-                agent_session = await _update_session_intent(
-                    session, session_id,
-                    state.get("intent", "question"),
-                    quiz_data=state.get("quiz_data"),
-                    answer=state.get("answer", ""),
-                    sources=state.get("sources", []),
-                    query=state.get("query", ""),
-                )
-
-            # 滚动压缩：当 L1 过长时，把老轮次压缩进 rolling_summary
-            compaction_count = state.get("compaction_count", 0)
-            if agent_session:
-                compaction_count += await _maybe_compact_session(state, agent_session)
-
-            # 记录压缩次数到 llm_calls 便于可观测（P5）
-            if compaction_count > 0:
-                llm_calls.append({
-                    "node": "compaction",
-                    "compacted_turns": compaction_count,
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0,
-                })
-
-            # ── Step E: 保存学情诊断报告 ──
-            diagnosis = state.get("diagnosis")
-            if diagnosis and diagnosis.get("total_practiced", 0) > 0:
-                from coursepilot.models import DiagnosisReport
-                report = DiagnosisReport(
-                    user_id=UUID(state["user_id"]),
-                    course_id=UUID(state["course_id"]),
-                    session_id=UUID(state["session_id"]),
-                    overall_rate=diagnosis["overall_rate"],
-                    total_practiced=diagnosis["total_practiced"],
-                    kp_stats=diagnosis.get("kp_stats"),
-                    weak_kps=diagnosis.get("weak_kps", []),
-                    llm_analysis=diagnosis.get("llm_analysis"),
-                    recommendations=diagnosis.get("recommendations"),
-                )
-                session.add(report)
-
-            # ── 提交事务 ──
-            await session.commit()
-
-        # ── Step F: 异步 audit 日志（独立 session，不阻塞） ──
-        import asyncio
-        asyncio.create_task(log_agent_chat(
-            user_id=state["user_id"],
-            session_id=state["session_id"],
-            intent=state.get("intent", ""),
-            query=state.get("query", ""),
-        ))
-        # P1: Agentic RAG 决策轨迹写入审计日志（agent_steps 非空时）
-        agent_steps = state.get("agent_steps") or []
-        if agent_steps:
-            asyncio.create_task(log_action(
-                user_id=state["user_id"],
-                action="agent.rag_steps",
-                resource_type="agent_session",
-                resource_id=state["session_id"],
-                details={
-                    "step_count": len(agent_steps),
-                    "tools_used": [s.get("tool") for s in agent_steps],
-                    "tool_history": state.get("tool_history") or [],
-                },
-            ))
-        if guard_issues:
-            asyncio.create_task(log_guardrail_violation(
-                user_id=state["user_id"],
-                session_id=state["session_id"],
-                issues=guard_issues,
-            ))
-
-        # ── Step G: Profile 更新（已有） ──
-        asyncio.create_task(update_profile(
-            user_id=state["user_id"],
-            course_id=state["course_id"],
-        ))
-
-        # ── Step H: L3 语义记忆抽取（P3） ──
-        try:
-            from coursepilot.agent.memory import extract_facts_for_session
-            asyncio.create_task(extract_facts_for_session(
-                user_id=state["user_id"],
-                course_id=state["course_id"],
-                session_id=state["session_id"],
-            ))
-        except Exception:
-            logger.exception("触发 L3 抽取任务失败")
-
-        # ── Step I: 同步触发一次 QA embedding 补全（P4） ──
-        try:
-            asyncio.create_task(ensure_qa_embeddings_for_user_course(
-                user_id=state["user_id"],
-                course_id=state["course_id"],
-            ))
-        except Exception:
-            logger.exception("触发 QA embedding 补全失败")
-
-        # P5: 把可观测快照写回 state，供 admin 控制台消费
-        # 这里取最近一次 query_rag 的 budget 信息
-        last_budget = None
-        last_layer_tokens = None
-        last_cache_hit = None
-        for call in reversed(llm_calls):
-            if call.get("node") == "query_rag":
-                last_budget = call.get("context_budget")
-                last_layer_tokens = call.get("layer_tokens")
-                last_cache_hit = call.get("cache_hit_estimated")
-                break
-
-        return {
-            "token_count": total_tokens,
-            "context_budget": last_budget,
-            "layer_tokens": last_layer_tokens,
-            "cache_hit_estimated": last_cache_hit,
-            "compaction_count": compaction_count,
-            "error": None,
-        }
+        # P5: 可观测快照写回 state，供 admin 控制台消费
+        return _observability_snapshot(llm_calls, total_tokens, compaction_count)
     except Exception as e:
         logger.exception("finalize 节点异常")
         return {"error": str(e)}
+
+
+def _run_guardrails(state: dict) -> list[str]:
+    """Step A: guardrails 检查（纯计算）。
+
+    输入 answer/context/sources，产出违规清单（仅告警日志，不阻断）。
+    """
+    from coursepilot.governance.guardrails import guard_answer
+
+    guard_issues = guard_answer(
+        answer=state.get("answer", ""),
+        context=state.get("context", ""),
+        sources=state.get("sources", []),
+    )
+    if guard_issues:
+        logger.warning("Guardrail 警告: %s", guard_issues)
+    return guard_issues
+
+
+async def _persist_core(
+    state: dict,
+    llm_calls: list[dict],
+    total_tokens: int,
+    total_prompt: int,
+    total_completion: int,
+) -> int:
+    """Step C/D/E：核心持久化（唯一事务）。
+
+    - Step C: QA Record（仅有效会话；路由兜底跳过 —— ① 遗留逻辑落点）
+    - Step D: 会话状态更新 + 滚动压缩（压缩暂在事务内，C4b 将移出主事务）
+    - Step E: 学情诊断报告
+
+    返回 compaction_count（供 finalize 回写 state 与 P5 快照）。
+    """
+    compaction_count = state.get("compaction_count", 0)
+    # fallback_reason 非空 = 本轮是兜底引导（none/未知/降级收口），
+    # update_qa_record 会触发 embedding + importance 计算，对引导文案无意义；
+    # Step D 的会话状态更新仍须保留。
+    is_fallback = bool(state.get("fallback_reason"))
+    session_id = state.get("session_id", "")
+
+    async with async_session_factory() as session:
+        # ── Step C: 写入 QA Record ──
+        if session_id and not is_fallback:
+            await update_qa_record(
+                session=session,
+                user_id=state["user_id"],
+                course_id=state["course_id"],
+                query=state["query"],
+                answer=state.get("answer", ""),
+                kp_path=_first_kp_path(state.get("retrieved_metadata", {})),
+                retrieved_units=state.get("retrieved_metadata", {}).get("top_uuids", []),
+                citations=state.get("sources", []),
+                session_id=session_id,
+                token_count=total_tokens,
+                prompt_tokens=total_prompt,
+                completion_tokens=total_completion,
+            )
+
+        # ── Step D: 更新会话状态（含 L1/L2 记忆，仅在 session_id 有效时） ──
+        agent_session = None
+        if session_id:
+            agent_session = await _update_session_intent(
+                session, session_id,
+                state.get("intent", "question"),
+                quiz_data=state.get("quiz_data"),
+                answer=state.get("answer", ""),
+                sources=state.get("sources", []),
+                query=state.get("query", ""),
+            )
+
+        # 滚动压缩：当 L1 过长时，把老轮次压缩进 rolling_summary
+        if agent_session:
+            compaction_count += await _maybe_compact_session(state, agent_session)
+
+        # 记录压缩次数到 llm_calls 便于可观测（P5）
+        if compaction_count > 0:
+            llm_calls.append({
+                "node": "compaction",
+                "compacted_turns": compaction_count,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            })
+
+        # ── Step E: 保存学情诊断报告 ──
+        diagnosis = state.get("diagnosis")
+        if diagnosis and diagnosis.get("total_practiced", 0) > 0:
+            from coursepilot.models import DiagnosisReport
+            report = DiagnosisReport(
+                user_id=UUID(state["user_id"]),
+                course_id=UUID(state["course_id"]),
+                session_id=UUID(state["session_id"]),
+                overall_rate=diagnosis["overall_rate"],
+                total_practiced=diagnosis["total_practiced"],
+                kp_stats=diagnosis.get("kp_stats"),
+                weak_kps=diagnosis.get("weak_kps", []),
+                llm_analysis=diagnosis.get("llm_analysis"),
+                recommendations=diagnosis.get("recommendations"),
+            )
+            session.add(report)
+
+        # ── 提交事务 ──
+        await session.commit()
+
+    return compaction_count
+
+
+def _spawn_audit_tasks(state: dict, guard_issues: list[str]) -> None:
+    """Step F: 异步 audit 日志（独立 session，不阻塞）。"""
+    from coursepilot.governance.audit import (
+        log_action,
+        log_agent_chat,
+        log_guardrail_violation,
+    )
+
+    _spawn_background(log_agent_chat(
+        user_id=state["user_id"],
+        session_id=state["session_id"],
+        intent=state.get("intent", ""),
+        query=state.get("query", ""),
+    ))
+    # P1: Agentic RAG 决策轨迹写入审计日志（agent_steps 非空时）
+    agent_steps = state.get("agent_steps") or []
+    if agent_steps:
+        _spawn_background(log_action(
+            user_id=state["user_id"],
+            action="agent.rag_steps",
+            resource_type="agent_session",
+            resource_id=state["session_id"],
+            details={
+                "step_count": len(agent_steps),
+                "tools_used": [s.get("tool") for s in agent_steps],
+                "tool_history": state.get("tool_history") or [],
+            },
+        ))
+    if guard_issues:
+        _spawn_background(log_guardrail_violation(
+            user_id=state["user_id"],
+            session_id=state["session_id"],
+            issues=guard_issues,
+        ))
+
+
+def _spawn_side_effects(state: dict) -> None:
+    """Step G/H/I: profile 更新、L3 语义记忆抽取、QA embedding 补全。"""
+    # ── Step G: Profile 更新 ──
+    _spawn_background(update_profile(
+        user_id=state["user_id"],
+        course_id=state["course_id"],
+    ))
+
+    # ── Step H: L3 语义记忆抽取（P3） ──
+    try:
+        from coursepilot.agent.memory import extract_facts_for_session
+        _spawn_background(extract_facts_for_session(
+            user_id=state["user_id"],
+            course_id=state["course_id"],
+            session_id=state["session_id"],
+        ))
+    except Exception:
+        logger.exception("触发 L3 抽取任务失败")
+
+    # ── Step I: 同步触发一次 QA embedding 补全（P4） ──
+    try:
+        _spawn_background(ensure_qa_embeddings_for_user_course(
+            user_id=state["user_id"],
+            course_id=state["course_id"],
+        ))
+    except Exception:
+        logger.exception("触发 QA embedding 补全失败")
+
+
+def _observability_snapshot(
+    llm_calls: list[dict],
+    total_tokens: int,
+    compaction_count: int,
+) -> dict:
+    """P5: 把可观测快照写回 state，供 admin 控制台消费。"""
+    # 这里取最近一次 query_rag 的 budget 信息
+    last_budget = None
+    last_layer_tokens = None
+    last_cache_hit = None
+    for call in reversed(llm_calls):
+        if call.get("node") == "query_rag":
+            last_budget = call.get("context_budget")
+            last_layer_tokens = call.get("layer_tokens")
+            last_cache_hit = call.get("cache_hit_estimated")
+            break
+
+    return {
+        "token_count": total_tokens,
+        "context_budget": last_budget,
+        "layer_tokens": last_layer_tokens,
+        "cache_hit_estimated": last_cache_hit,
+        "compaction_count": compaction_count,
+        "error": None,
+    }
 
 async def _update_session_intent(
     session: AsyncSession, session_id: str, intent: str,
