@@ -83,7 +83,6 @@ class TestFinalizeNode:
             "retrieved_metadata": {"source_kp_paths": ["OS/进程管理"], "top_uuids": []},
             "sources": [{"kp_path": "OS/进程管理"}],
             "llm_calls": llm_calls or [{"node": "classify", **ZERO_TOKENS}],
-            "human_review_result": None,
         }
 
     @pytest.mark.asyncio

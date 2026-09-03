@@ -34,7 +34,7 @@ class AgentSession(Base):
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending",
-        comment="pending/running/waiting_human/completed/failed",
+        comment="pending/running/completed/failed（waiting_human 已随 HITL 审批移除）",
     )
     token_count: Mapped[int] = mapped_column(
         Integer, default=0, comment="Token 消耗量",

@@ -5,7 +5,6 @@
 import logging
 from uuid import UUID
 
-from langgraph.types import interrupt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,12 +20,10 @@ from coursepilot.agent.skills.review_plan import review_plan
 from coursepilot.agent.skills.update_qa_record import update_qa_record
 from coursepilot.agent.state_models import QUIZ_FALLBACK
 from coursepilot.db import async_session_factory
-from coursepilot.models import AgentSession, User
+from coursepilot.models import AgentSession
 from coursepilot.rag.config import config as rag_config
 
 logger = logging.getLogger(__name__)
-
-HUMAN_REVIEW_INTENTS = {"practice", "review"}
 
 async def build_context_node(state: dict) -> dict:
     """构建上下文：课程信息（KP数+教材名） + 学生画像 + 最近问答"""
@@ -240,7 +237,6 @@ async def finalize_node(state: dict) -> dict:
                 agent_session = await _update_session_intent(
                     session, session_id,
                     state.get("intent", "question"),
-                    human_review_result=state.get("human_review_result"),
                     quiz_data=state.get("quiz_data"),
                     answer=state.get("answer", ""),
                     sources=state.get("sources", []),
@@ -363,7 +359,6 @@ async def finalize_node(state: dict) -> dict:
 
 async def _update_session_intent(
     session: AsyncSession, session_id: str, intent: str,
-    human_review_result: str | None = None,
     quiz_data: dict | None = None,
     answer: str | None = None,
     sources: list[dict] | None = None,
@@ -400,10 +395,7 @@ async def _update_session_intent(
         "query": query or "",
     })
     agent_session.conversation = conv
-    if human_review_result == "rejected":
-        agent_session.status = "rejected"
-    else:
-        agent_session.status = "completed"
+    agent_session.status = "completed"
 
     return agent_session
 
@@ -681,53 +673,3 @@ async def review_plan_node(state: dict) -> dict:
     except Exception as e:
         logger.exception("review_plan_node 异常")
         return {"review_plan": {}, "answer": "生成复习计划失败", "error": str(e)}
-
-async def human_review_node(state: dict) -> dict:
-    """人类审批节点：在高风险操作前暂停等待确认
-
-    教师和超级管理员自动跳过审批（auto-approve），
-    学生则需要等待教师人工确认。
-
-    使用 interrupt() 暂停图执行 → 保存 checkpoint
-    恢复时传入 resume={"approved": True/False, "feedback": "..."}
-
-    interrupt() 的参数是发送给调用者的消息（展示给前端）
-    """
-    intent = state.get("intent", "")
-    user_id = state.get("user_id", "")
-
-    # 查询用户角色，教师和超级管理员自动通过审批
-    auto_approve = False
-    if user_id:
-        try:
-            async with async_session_factory() as session:
-                result = await session.execute(
-                    select(User).where(User.id == UUID(user_id))
-                )
-                user = result.scalar_one_or_none()
-                if user and user.role in ("teacher", "super"):
-                    auto_approve = True
-        except Exception:
-            logger.warning("查询用户角色失败 user_id=%s", user_id)
-
-    if intent in HUMAN_REVIEW_INTENTS and not auto_approve:
-        # interrupt() 暂停执行，等待 resume 值
-        # 返回值是调用 Command(resume=...) 时传来的数据
-        approval = interrupt({
-            "type": "human_review",
-            "intent": intent,
-            "query": state.get("query", "")[:200],
-            "message": f"需要确认是否执行 {intent} 操作"
-        })
-    else:
-        approval = {"approved": True}
-
-    if not isinstance(approval, dict) or not approval.get("approved", False):
-        # 人类拒绝 → 跳过后续节点，直接到 finalize
-        return {
-            "answer": f"{intent} 操作已被管理员暂停，请联系教师确认",
-            "human_review_result": "rejected",
-            "error": None,
-        }
-
-    return {"human_review_result": "approved", "error": None}

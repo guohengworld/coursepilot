@@ -1,8 +1,7 @@
 """确定性 Role 层 —— 编排层访问角色能力的唯一入口。
 
-把「用户角色」从散落在节点内部的 DB 查询 / 硬编码（如 human_review_node
-里的 ``user.role in ("teacher", "super")``），收敛为「图内确定性事实 + 复用
-governance/rbac.py 的单一真源」。
+把「用户角色」从散落在节点内部的 DB 查询 / 硬编码，收敛为
+「图内确定性事实 + 复用 governance/rbac.py 的单一真源」。
 
 本层纯同步、零 LLM、零 DB：role 由图外鉴权层（api/agent.py）通过
 ``current_user.role`` 传入，本层只做「角色字符串 → 层级 / 权限」的确定性映射。

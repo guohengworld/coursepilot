@@ -4,14 +4,14 @@
 对应的重构方案步骤 0（锁行为）：docs/agent/编排层重构方案.md。
 
 覆盖三个层次：
-  1. 路由映射快照（纯函数）：route_by_intent / route_after_rag / route_after_evaluate /
-     route_after_review 的输入 → 输出映射，锁定 intent×complexity 组合行为，
+  1. 路由映射快照（纯函数）：route_by_intent / route_after_rag / route_after_evaluate
+     的输入 → 输出映射，锁定 intent×complexity 组合行为，
      显式锁定 none 意图"静默走 query_rag"的现状（未定义行为先锁住，重构后再决定改法）。
-  2. 真实图拓扑快照：build_agent_graph() 编译后的自定义节点集合（13 个，含路由兜底
+  2. 真实图拓扑快照：build_agent_graph() 编译后的自定义节点集合（12 个，含路由兜底
      fallback 节点——flag 关闭时无入边、不可达，但常驻注册）。
   3. E2E 行为快照：真实图 + MemorySaver + 全 mock 外部依赖，
-     question / none / diagnose 三条完整路径的"节点执行序列 + 输出"，
-     practice / review 锁到 human_review interrupt（审批前行为，含 resume 后完整路径）。
+     question / none / diagnose / practice / review 完整路径的"节点执行序列 + 输出"。
+     practice / review 为无审批直通（HITL 已随 commit ③ 移除）。
 
 运行：
     .venv/Scripts/python -m pytest tests/unit/test_orchestration_behavior.py -v
@@ -30,7 +30,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from langgraph.types import Command
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
@@ -173,7 +172,7 @@ def _mock_external_deps(mock_asf, extra_patches=(), **overrides):
 # ═══════════════════════════════════════════════════════════════
 
 class TestRoutingSnapshot:
-    """route_by_intent 等 4 个路由函数的输入 → 输出快照"""
+    """route_by_intent 等 3 个路由函数的输入 → 输出快照"""
 
     def test_route_by_intent_snapshot(self):
         """route_by_intent 全组合映射（含 none 意图现状）"""
@@ -187,12 +186,12 @@ class TestRoutingSnapshot:
         # question + complex + 开关关闭 → 回退快速通道
         with patch("coursepilot.rag.config.config.enable_routing", False):
             assert route_by_intent({"intent": "question", "complexity": "complex"}) == "query_rag"
-        # practice / review → 生成前人工审批（锁盲审位置）
-        assert route_by_intent({"intent": "practice"}) == "human_review"
-        assert route_by_intent({"intent": "review"}) == "human_review"
-        # diagnose → 直接诊断（只读，无需审批）
+        # practice / review → 无审批直通旧链路前缀 get_mastery（HITL 已移除）
+        assert route_by_intent({"intent": "practice"}) == "get_mastery"
+        assert route_by_intent({"intent": "review"}) == "get_mastery"
+        # diagnose → 直接诊断（只读）
         assert route_by_intent({"intent": "diagnose"}) == "diagnose"
-        # none 意图：当前静默走 query_rag（锁现状，重构方案阶段 4 再决定显式兜底）
+        # none 意图：当前静默走 query_rag（锁现状，flag 开启时显式收口 fallback）
         assert route_by_intent({"intent": "none"}) == "query_rag"
         # 未知 / 缺失 intent → 默认 query_rag
         assert route_by_intent({"intent": "unknown"}) == "query_rag"
@@ -216,7 +215,7 @@ class TestRoutingSnapshot:
             }) == "fallback"
             # 正常意图不受 flag 影响
             assert route_by_intent({"intent": "question", "complexity": "simple"}) == "query_rag"
-            assert route_by_intent({"intent": "practice"}) == "human_review"
+            assert route_by_intent({"intent": "practice"}) == "get_mastery"
             assert route_by_intent({"intent": "diagnose"}) == "diagnose"
 
     def test_route_by_intent_fallback_off_classify_degraded_ignored(self):
@@ -263,23 +262,6 @@ class TestRoutingSnapshot:
             "eval_result": {"status": "PASS"}, "retry_count": 0, "intent": "question",
         }) == "finalize"
 
-    def test_route_after_review_snapshot(self):
-        """审批后：rejected → 收口；approved + practice/review → get_mastery"""
-        from coursepilot.agent.routing import route_after_review
-
-        assert route_after_review({
-            "human_review_result": "rejected", "intent": "practice",
-        }) == "finalize"
-        assert route_after_review({
-            "human_review_result": "approved", "intent": "practice",
-        }) == "get_mastery"
-        assert route_after_review({
-            "human_review_result": "approved", "intent": "review",
-        }) == "get_mastery"
-        assert route_after_review({
-            "human_review_result": "approved", "intent": "question",
-        }) == "finalize"
-
 
 # ═══════════════════════════════════════════════════════════════
 # 2. 真实图拓扑快照
@@ -290,13 +272,12 @@ class TestGraphTopologySnapshot:
 
     @pytest.mark.asyncio
     async def test_real_graph_custom_nodes(self, real_graph):
-        """真实图包含 13 个自定义节点（含 agentic_rag / human_review / fallback）"""
+        """真实图包含 12 个自定义节点（含 agentic_rag / fallback，无 human_review）"""
         custom_nodes = {n for n in real_graph.nodes if not str(n).startswith("__")}
         expected = {
             "build_context", "classify", "query_rag", "get_mastery",
             "generate_quiz", "evaluate_quiz", "create_plan", "diagnose",
-            "review_plan", "finalize", "human_review", "agentic_rag",
-            "fallback",
+            "review_plan", "finalize", "agentic_rag", "fallback",
         }
         assert custom_nodes == expected
 
@@ -448,34 +429,8 @@ class TestE2EBehaviorSnapshot:
         assert final.values["error"] is None
 
     @pytest.mark.asyncio
-    async def test_practice_path_stops_at_human_review(self, real_graph, base_state, mock_asf):
-        """practice：学生请求在生成前被 human_review 拦截（锁盲审位置）"""
-        thread_id = str(uuid4())
-        config = {"configurable": {"thread_id": thread_id}}
-
-        events = []
-        classify = AsyncMock(return_value=("practice", "simple", MOCK_TOKENS))
-        with _mock_external_deps(mock_asf, classify_intent=classify):
-            async for chunk in real_graph.astream(base_state, config, stream_mode="updates"):
-                events.append(chunk)
-            snapshot = await real_graph.aget_state(config)
-
-        sequence = _node_sequence(events)
-        # 审批前：build_context → classify 后即挂起。
-        # human_review 节点执行到 interrupt() 时被中断、不产出 update，
-        # "停在 human_review"由下方 snapshot.next + interrupt payload 证明。
-        assert sequence == ["build_context", "classify"]
-        assert snapshot.next, "应因 interrupt 挂起在 human_review"
-        # interrupt payload 携带 intent 与原始 query（前端展示用）
-        interrupt_payload = snapshot.interrupts[0].value if snapshot.interrupts else None
-        assert interrupt_payload is not None
-        assert interrupt_payload["type"] == "human_review"
-        assert interrupt_payload["intent"] == "practice"
-        assert interrupt_payload["query"] == base_state["query"]
-
-    @pytest.mark.asyncio
-    async def test_practice_path_resume_after_approval(self, real_graph, base_state, mock_asf):
-        """practice：审批通过后走 get_mastery → query_rag → generate_quiz → evaluate_quiz → create_plan → finalize"""
+    async def test_practice_path_direct(self, real_graph, base_state, mock_asf):
+        """practice：无审批直通 get_mastery → query_rag → generate_quiz → evaluate_quiz → create_plan → finalize"""
         thread_id = str(uuid4())
         config = {"configurable": {"thread_id": thread_id}}
 
@@ -490,6 +445,7 @@ class TestE2EBehaviorSnapshot:
         }, MOCK_TOKENS))
         evaluate_quiz = AsyncMock(return_value=({"status": "PASS", "score": 0.9}, MOCK_TOKENS))
 
+        events = []
         with _mock_external_deps(
             mock_asf, classify_intent=classify, extra_patches=[
                 patch("coursepilot.agent.nodes.get_mastery", get_mastery),
@@ -497,52 +453,68 @@ class TestE2EBehaviorSnapshot:
                 patch("coursepilot.agent.nodes.evaluate_quiz", evaluate_quiz),
             ],
         ):
-            # 第一次执行：停在 human_review
-            async for _ in real_graph.astream(base_state, config, stream_mode="updates"):
-                pass
-            snapshot = await real_graph.aget_state(config)
-            assert snapshot.next, "应挂起在 human_review"
-
-            # 审批通过 → 继续执行
-            events = []
-            async for chunk in real_graph.astream(
-                Command(resume={"approved": True}), config, stream_mode="updates"
-            ):
+            async for chunk in real_graph.astream(base_state, config, stream_mode="updates"):
                 events.append(chunk)
             final = await real_graph.aget_state(config)
 
         sequence = _node_sequence(events)
-        # resume 后 human_review 重跑消费 resume 值，然后继续主路径
+        # 直通：classify 后不再挂起审批，直达 get_mastery 旧链路前缀（HITL 已移除）
         assert sequence == [
-            "human_review", "get_mastery", "query_rag", "generate_quiz",
+            "build_context", "classify", "get_mastery", "query_rag", "generate_quiz",
             "evaluate_quiz", "create_plan", "finalize",
         ]
         assert final.values["intent"] == "practice"
         assert "为你生成了 1 道练习题" in final.values["answer"]
-        assert final.values["human_review_result"] == "approved"
         assert final.values["error"] is None
 
     @pytest.mark.asyncio
-    async def test_review_path_stops_at_human_review(self, real_graph, base_state, mock_asf):
-        """review：与 practice 一致，生成前被 human_review 拦截"""
+    async def test_review_path_direct(self, real_graph, base_state, mock_asf):
+        """review：无审批直通 get_mastery → query_rag → generate_quiz → evaluate_quiz → review_plan → finalize"""
         thread_id = str(uuid4())
         config = {"configurable": {"thread_id": thread_id}}
 
-        events = []
         classify = AsyncMock(return_value=("review", "simple", MOCK_TOKENS))
-        with _mock_external_deps(mock_asf, classify_intent=classify):
+        get_mastery = AsyncMock(return_value={"mastery_level": {}, "weak_kps": []})
+        generate_quiz = AsyncMock(return_value=({
+            "questions": [
+                {"question_text": "进程调度的目的是？",
+                 "options": {"A": "提高吞吐", "B": "降低延迟"},
+                 "kp_path": "OS/进程管理/进程调度"},
+            ],
+        }, MOCK_TOKENS))
+        evaluate_quiz = AsyncMock(return_value=({"status": "PASS", "score": 0.9}, MOCK_TOKENS))
+        review_plan = AsyncMock(return_value=(
+            {"plan_summary": "复习计划已生成，聚焦 2 个薄弱知识点"}, MOCK_TOKENS,
+        ))
+        diagnose = AsyncMock(return_value={
+            "summary": "学情概览", "total_practiced": 0,
+            "overall_rate": 0.0, "kp_stats": {}, "weak_kps": [],
+        })
+
+        events = []
+        with _mock_external_deps(
+            mock_asf, classify_intent=classify, extra_patches=[
+                patch("coursepilot.agent.nodes.get_mastery", get_mastery),
+                patch("coursepilot.agent.nodes.generate_quiz", generate_quiz),
+                patch("coursepilot.agent.nodes.evaluate_quiz", evaluate_quiz),
+                patch("coursepilot.agent.nodes.review_plan", review_plan),
+                # review 不经 diagnose_node，review_plan_node 内部会实时补查；
+                # 该调用是 review_plan_node 内的局部 import，需 patch skill 函数本体
+                patch("coursepilot.agent.skills.diagnose.diagnose", diagnose),
+            ],
+        ):
             async for chunk in real_graph.astream(base_state, config, stream_mode="updates"):
                 events.append(chunk)
-            snapshot = await real_graph.aget_state(config)
+            final = await real_graph.aget_state(config)
 
         sequence = _node_sequence(events)
-        # 与 practice 一致：classify 后挂起，human_review 不产出 update，
-        # 挂起位置由 snapshot.next + interrupt payload 证明。
-        assert sequence == ["build_context", "classify"]
-        assert snapshot.next, "应因 interrupt 挂起在 human_review"
-        interrupt_payload = snapshot.interrupts[0].value if snapshot.interrupts else None
-        assert interrupt_payload is not None
-        assert interrupt_payload["intent"] == "review"
+        assert sequence == [
+            "build_context", "classify", "get_mastery", "query_rag", "generate_quiz",
+            "evaluate_quiz", "review_plan", "finalize",
+        ]
+        assert final.values["intent"] == "review"
+        assert "复习计划" in final.values["answer"]
+        assert final.values["error"] is None
 
 
 # ═══════════════════════════════════════════════════════════════

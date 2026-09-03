@@ -78,7 +78,7 @@ class OutputState(TypedDict):
 
     字段选择：覆盖现有测试依赖的最终可观察字段（intent/complexity/
     answer/sources/token_count/llm_calls）+ 运行态标记（degraded_mode/
-    human_review_result/error）+ 路由兜底标记（fallback_reason/routing_notes）。
+    error）+ 路由兜底标记（fallback_reason/routing_notes）。
     context / retrieved_metadata / quiz_data
     等中间与观测字段留在内部状态，不对外公开。
     """
@@ -97,7 +97,6 @@ class OutputState(TypedDict):
 
     # 运行态标记
     degraded_mode: bool             # True=guardrail 触发，降级生成（含免责声明）
-    human_review_result: str | None # None / "approved" / "rejected"
     error: str | None
 
     # 可观测

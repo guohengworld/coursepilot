@@ -1,10 +1,9 @@
 """条件路由函数。
 
-提供 4 个路由函数供 graph.py 的条件边使用：
-  - route_by_intent: classify 后分发
+提供 3 个路由函数供 graph.py 的条件边使用：
+  - route_by_intent: classify 后分发（practice/review 直通，无审批）
   - route_after_rag: query_rag / agentic_rag 后分发
   - route_after_evaluate: evaluate_quiz 后分发（含重试逻辑）
-  - route_after_review: human_review 后分发
 """
 import logging
 
@@ -30,10 +29,14 @@ def route_by_intent(state: dict) -> str:
     none 单独显式分支，不依赖 VALID_INTENTS 是否含 none：白名单只筛未知值，
     两者互不耦合。flag 关闭时保持原行为（末行四合一兜底）。
 
+    practice / review 无审批直通：HITL 审批已移除（commit ③），
+    子图隔离 flag 开启时直达对应子图，否则走旧链路前缀 get_mastery。
+
     Returns:
         "fallback"     — 兜底收口（flag 开启时的 none/未知/缺失/降级）
-        "human_review" — 需要审批的路径
-        "get_mastery"  — practice / review（需要掌握度）
+        "practice"     — practice 子图（orch_subgraph_practice=True）
+        "review"       — review 子图（orch_subgraph_review=True）
+        "get_mastery"  — practice / review 旧链路前缀（子图 flag 关闭时）
         "diagnose"     — diagnose
         "question"     — question（子图隔离开启后，复杂度分发移入子图）
         "agentic_rag"  — complex question（LLM 自主 ReAct 循环）
@@ -49,9 +52,12 @@ def route_by_intent(state: dict) -> str:
             return "fallback"
 
     if intent in ("practice", "review"):
-        return "human_review"      # 需要教师审批
+        # 直通：子图隔离 flag 开启走子图，否则旧链路 get_mastery 前缀
+        if intent == "practice":
+            return "practice" if settings.orch_subgraph_practice else "get_mastery"
+        return "review" if settings.orch_subgraph_review else "get_mastery"
     elif intent == "diagnose":
-        return "diagnose"          # 诊断只读，无需审批
+        return "diagnose"          # 诊断只读
     elif intent == "question":
         if settings.orch_subgraph_question:
             return "question"      # 子图接管，复杂度分发移入子图
@@ -60,24 +66,6 @@ def route_by_intent(state: dict) -> str:
         return "query_rag"         # 简单 → 快速通道
     # intent 未识别：按简单问答兜底
     return "question" if settings.orch_subgraph_question else "query_rag"
-
-
-def route_after_review(state: dict) -> str:
-    """human_review 节点后的路由
-
-    审批通过后按 intent 分发：
-      - practice → "practice" 子图（flag 开启）或 "get_mastery" 旧链路
-      - review   → "review" 子图（flag 开启）或 "get_mastery" 旧链路
-      - rejected / 其他 → 收口 finalize
-    """
-    if state.get("human_review_result") == "rejected":
-        return "finalize"
-    intent = state.get("intent", "")
-    if intent == "practice":
-        return "practice" if settings.orch_subgraph_practice else "get_mastery"
-    if intent == "review":
-        return "review" if settings.orch_subgraph_review else "get_mastery"
-    return "finalize"
 
 
 def route_after_rag(state: dict) -> str:

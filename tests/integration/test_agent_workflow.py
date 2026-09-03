@@ -1,12 +1,12 @@
 """Agent 工作流集成测试：用 MemorySaver + 真实 DB 验证完整路由
 
-测试覆盖所有 5 条路径和重试逻辑。LLM skill 全部 mock。
+测试覆盖所有路径与重试逻辑（HITL 审批已移除，practice/review 无中断直通）。
+LLM skill 全部 mock。
 """
 import uuid
 from unittest.mock import patch, AsyncMock
 
 import pytest
-from langgraph.types import Command
 
 from tests.integration.conftest import ZERO_TOKENS
 
@@ -159,11 +159,11 @@ class TestDiagnoseWorkflow:
 
 
 class TestPracticeWorkflow:
-    """practice 路径：含 human_review → get_mastery → query_rag → gen → eval → create_plan"""
+    """practice 路径：无审批直通 get_mastery → query_rag → gen → eval → create_plan"""
 
     @pytest.mark.asyncio
     async def test_practice_path(self, raw_session, std_data, real_asf):
-        """practice 路径通过 interrupt/resume 到达 create_plan"""
+        """practice 单次执行直达 create_plan"""
         uid, cid = std_data["user_id"], std_data["course_id"]
 
         with (
@@ -195,55 +195,14 @@ class TestPracticeWorkflow:
             }
 
             result = await graph.ainvoke(state, config)
-            # result should contain the interrupt info
-            # resume with approval
-            result = await graph.ainvoke(
-                Command(resume={"approved": True}),
-                config,
-            )
 
         assert result["intent"] == "practice"
         assert "练习题" in result.get("answer", "")
         assert len(result.get("sources", [])) > 0
 
-    @pytest.mark.asyncio
-    async def test_practice_rejected(self, raw_session, std_data, real_asf):
-        """human_review 拒绝 → 直接到 finalize"""
-        uid, cid = std_data["user_id"], std_data["course_id"]
-
-        with (
-            patch("coursepilot.agent.nodes.async_session_factory", real_asf),
-            patch("coursepilot.agent.nodes.classify_intent",
-                  return_value=("practice", ZERO_TOKENS)),
-            patch("coursepilot.agent.nodes.update_profile", new=AsyncMock()),
-        ):
-            from coursepilot.agent.graph import build_agent_graph
-            from langgraph.checkpoint.memory import MemorySaver
-            with patch("coursepilot.agent.graph._get_saver", return_value=MemorySaver()):
-                graph = await build_agent_graph()
-
-            thread_id = str(uuid.uuid4())
-            state = {
-                "query": "帮我练习", "course_id": str(cid),
-                "user_id": str(uid), "session_id": str(uuid.uuid4()),
-                "messages": [], "course_context": {}, "user_profile": None,
-                "recent_qa": [], "intent": "", "context": "",
-                "retrieved_metadata": {}, "answer": "", "sources": [],
-                "token_count": 0, "llm_calls": [], "error": None,
-            }
-            config = {"configurable": {"thread_id": thread_id}}
-
-            result = await graph.ainvoke(state, config)
-            result = await graph.ainvoke(
-                Command(resume={"approved": False}),
-                config,
-            )
-
-        assert "暂停" in result.get("answer", "")
-
 
 class TestReviewWorkflow:
-    """review 路径：含 human_review → ... → evaluate_quiz → review_plan"""
+    """review 路径：无审批直通 → evaluate_quiz → review_plan"""
 
     @pytest.mark.asyncio
     async def test_review_path(self, raw_session, std_data, real_asf):
@@ -278,10 +237,6 @@ class TestReviewWorkflow:
             }
 
             result = await graph.ainvoke(state, config)
-            result = await graph.ainvoke(
-                Command(resume={"approved": True}),
-                config,
-            )
 
         assert result["intent"] == "review"
         # review path: evaluate_quiz passes → review_plan → finalize
@@ -333,10 +288,6 @@ class TestRetryLoop:
             }
 
             result = await graph.ainvoke(state, config)
-            result = await graph.ainvoke(
-                Command(resume={"approved": True}),
-                config,
-            )
 
         assert result["intent"] == "practice"
         assert eval_counter[0] == 3  # 2 fail + 1 pass = 3 calls
@@ -380,46 +331,7 @@ class TestRetryLoop:
             }
 
             result = await graph.ainvoke(state, config)
-            result = await graph.ainvoke(
-                Command(resume={"approved": True}),
-                config,
-            )
 
         # 虽然始终 FAIL，但 retry_count >= 2 后强制继续到 create_plan
         assert result["intent"] == "practice"
         assert eval_counter[0] == 3  # gen(0) → eval(fail) → gen(1) → eval(fail) → gen(2) → eval(fail) → force
-
-
-class TestHumanReview:
-    """human-in-the-loop interrupt/resume"""
-
-    @pytest.mark.asyncio
-    async def test_interrupt_state_on_hold(self, raw_session, std_data, real_asf):
-        """practice intent 触发 interrupt 后 state 保存 checkpoint"""
-        uid, cid = std_data["user_id"], std_data["course_id"]
-
-        with (
-            patch("coursepilot.agent.nodes.async_session_factory", real_asf),
-            patch("coursepilot.agent.nodes.classify_intent",
-                  return_value=("practice", ZERO_TOKENS)),
-            patch("coursepilot.agent.nodes.update_profile", new=AsyncMock()),
-        ):
-            from coursepilot.agent.graph import build_agent_graph
-            from langgraph.checkpoint.memory import MemorySaver
-            with patch("coursepilot.agent.graph._get_saver", return_value=MemorySaver()):
-                graph = await build_agent_graph()
-
-            thread_id = str(uuid.uuid4())
-            state = {
-                "query": "练习", "course_id": str(cid),
-                "user_id": str(uid), "session_id": str(uuid.uuid4()),
-                "messages": [], "course_context": {}, "user_profile": None,
-                "recent_qa": [], "intent": "", "context": "",
-                "retrieved_metadata": {}, "answer": "", "sources": [],
-                "token_count": 0, "llm_calls": [], "error": None,
-            }
-
-            result = await graph.ainvoke(state, {"configurable": {"thread_id": thread_id}})
-            # interrupt 后可以读取中间状态
-            current = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-            assert current.values.get("intent") == "practice"

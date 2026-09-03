@@ -1,7 +1,8 @@
-"""Agent API：聊天入口、会话查询、人口审批占位
+"""Agent API：聊天入口、会话查询与删除
 
 遵循与 api/auth.py、api/courses.py 相同的模式：
 APIRouter + Depends(get_session) + Depends(get_current_user)。
+HITL 审批（approve 端点 / waiting_human 状态）已随 commit ③ 移除。
 """
 import asyncio
 import logging
@@ -9,7 +10,6 @@ from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from langgraph.types import Command
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,10 +32,6 @@ class ChatRequest(BaseModel):
 class ChatAcceptedResponse(BaseModel):
     session_id: str
     status: str = "processing"
-
-class ApproveRequest(BaseModel):
-    approved: bool = True
-    feedback: str | None = None
 
 class SessionListItem(BaseModel):
     session_id: str
@@ -77,25 +73,10 @@ async def _get_graph():
 async def _run_graph_background(
     graph, initial_state: dict, config: dict, session_id: str
 ) -> None:
-    """后台执行 LangGraph，异常或中断时更新会话状态"""
+    """后台执行 LangGraph，异常时将会话标记为 failed"""
     try:
         await graph.ainvoke(initial_state, config)
-
-        # 检测是否被 interrupt() 暂停（等待人类审批）
-        snapshot = await graph.aget_state(config)
-        if snapshot and snapshot.next:
-            logger.info("会话 %s 进入等待审批状态 (next=%s)", session_id, snapshot.next)
-            async with async_session_factory() as bg_session:
-                result = await bg_session.execute(
-                    select(AgentSession).where(AgentSession.id == UUID(session_id))
-                )
-                agent_session = result.scalar_one_or_none()
-                if agent_session:
-                    agent_session.status = "waiting_human"
-                await bg_session.commit()
-            return  # 等待审批，不标记异常
-
-        # finalize_node 已负责写入所有数据
+        # finalize_node 已负责写入所有数据与状态
     except Exception:
         logger.exception("后台图执行失败 session_id=%s", session_id)
         async with async_session_factory() as bg_session:
@@ -141,8 +122,8 @@ async def chat(
             raise HTTPException(status_code=404, detail="会话不存在")
         if agent_session.user_id != current_user.id:
             raise HTTPException(status_code=403, detail="无权访问此会话")
-        if agent_session.status not in ("completed", "failed", "rejected"):
-            raise HTTPException(status_code=400, detail="会话正在处理中，请稍后")
+        if agent_session.status not in ("completed", "failed"):
+            raise HTTPException(status_code=400, detail="会话当前不可继续，请稍后或新建会话")
 
         # 更新 session 准备新一轮
         agent_session.query = request.message
@@ -238,7 +219,7 @@ async def list_sessions(
 
     - 学生：仅查自己的会话
     - 教师/管理员（agent:session:list_all）：查所有会话
-    - 可选 status 参数过滤（如 ?status=waiting_human）
+    - 可选 status 参数过滤
     """
     from coursepilot.governance.rbac import has_permission
 
@@ -346,62 +327,6 @@ async def get_session_status(
         created_at=agent_session.created_at.isoformat(),
         updated_at=agent_session.updated_at.isoformat(),
     )
-
-async def _resume_graph_background(
-    graph, thread_id: str, session_id: str, approved: bool
-) -> None:
-    """后台恢复被 interrupt 暂停的图执行"""
-    try:
-        await graph.ainvoke(
-            Command(resume={"approved": approved}),
-            {"configurable": {"thread_id": thread_id}},
-        )
-        # finalize_node 已负责写入所有数据 + 更新状态
-    except Exception:
-        logger.exception("后台恢复执行失败 session_id=%s", session_id)
-        async with async_session_factory() as bg_session:
-            result = await bg_session.execute(
-                select(AgentSession).where(AgentSession.id == UUID(session_id))
-            )
-            agent_session = result.scalar_one_or_none()
-            if agent_session:
-                agent_session.status = "failed"
-            await bg_session.commit()
-
-
-@router.post("/sessions/{session_id}/approve", status_code=202)
-async def approve_session(
-    session_id: str,
-    body: ApproveRequest,
-    current_user: User = Depends(get_current_user),
-    db_session: AsyncSession = Depends(get_session),
-):
-    """人工审批（通过/拒绝）：后台恢复被 interrupt 暂停的图执行"""
-    from coursepilot.governance.rbac import has_permission
-    if not has_permission(current_user.role, "agent:session:list_all"):
-        raise HTTPException(status_code=403, detail="无权审批")
-
-    # 1. 验证会话存在
-    result = await db_session.execute(
-        select(AgentSession).where(AgentSession.id == UUID(session_id))
-    )
-    agent_session = result.scalar_one_or_none()
-    if not agent_session:
-        raise HTTPException(status_code=404, detail="会话不存在")
-
-    if agent_session.status != "waiting_human":
-        raise HTTPException(status_code=400, detail="会话不在等待审批状态")
-
-    # 2. 后台恢复图执行（不阻塞请求）
-    graph = await _get_graph()
-    thread_id = agent_session.langgraph_thread_id or session_id
-    asyncio.create_task(_resume_graph_background(graph, thread_id, session_id, body.approved))
-
-    return {
-        "status": "resumed",
-        "session_id": session_id,
-        "approved": body.approved,
-    }
 
 
 @router.delete("/sessions/{session_id}", status_code=204)

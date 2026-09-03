@@ -1,16 +1,18 @@
 """LangGraph 状态机构建
 
-P1 拓扑（复杂问题走 Agentic RAG，CRAG 补搜循环已删除）：
+P1 拓扑（复杂问题走 Agentic RAG，CRAG 补搜循环已删除；HITL 审批已移除，
+practice/review 无审批直通，classify 后直接分发到 get_mastery 旧链路前缀）：
     START → build_context → classify → [route_by_intent]
-      ├─ query_rag → [route_after_rag] → finalize → END
-      │   └─ (practice/review) → generate_quiz → evaluate_quiz
-      │        └─ [route_after_evaluate]:
-      │            FAIL+retry<2 → generate_quiz (重试)
-      │            PASS+practice → create_plan → finalize
-      │            PASS+review → review_plan → finalize
+      ├─ query_rag → [route_after_rag] ─┬─ question 收口 → finalize → END
+      │                                 └─ practice/review → generate_quiz
+      │                                      → evaluate_quiz → [route_after_evaluate]:
+      │                                          FAIL+retry<2 → generate_quiz (重试)
+      │                                          PASS+practice → create_plan → finalize
+      │                                          PASS+review → review_plan → finalize
       ├─ agentic_rag → [route_after_rag] → (同上)   # complex question：LLM 自主 ReAct 循环
-      ├─ get_mastery → query_rag → (同上)
-      └─ diagnose → finalize → END
+      ├─ get_mastery → query_rag → (同上)           # practice/review 旧链路前缀
+      ├─ diagnose → finalize → END
+      └─ fallback → finalize → END                  # 兜底收口（flag 开启时可达）
 
 机制 3 子图隔离（Strangler Fig 渐进切换，flag 默认 False 行为零变化）：
     - orch_subgraph_diagnose=True  → diagnose 抽为子图
@@ -40,7 +42,6 @@ from coursepilot.agent.nodes import (
     finalize_node,
     generate_quiz_node,
     get_mastery_node,
-    human_review_node,
     query_rag_node,
     review_plan_node,
 )
@@ -48,7 +49,6 @@ from coursepilot.agent.rag_agent import agentic_rag_node
 from coursepilot.agent.routing import (
     route_after_evaluate,
     route_after_rag,
-    route_after_review,
     route_by_intent,
 )
 from coursepilot.agent.state import AgentState, InputState, OutputState
@@ -119,7 +119,6 @@ async def build_agent_graph():
     # route_by_intent 不返 "fallback"，该节点无入边、不可达（编译不报错）。
     builder.add_node("fallback", fallback_node)
     builder.add_node("finalize", finalize_node)
-    builder.add_node("human_review", human_review_node)
     # 诊断：子图 or 节点函数
     builder.add_node(
         "diagnose",
@@ -152,7 +151,6 @@ async def build_agent_graph():
 
     # classify → intent + complexity 分发
     classify_targets = {
-        "human_review": "human_review",
         "diagnose": "diagnose",
         "fallback": "fallback",
     }
@@ -161,17 +159,15 @@ async def build_agent_graph():
     else:
         classify_targets["query_rag"] = "query_rag"
         classify_targets["agentic_rag"] = "agentic_rag"
-    builder.add_conditional_edges("classify", route_by_intent, classify_targets)
-
-    # human_review → 审批后进 practice/review 子图 or 旧 get_mastery
-    review_targets = {"finalize": "finalize"}
+    # practice/review 直通（HITL 审批已移除）：子图 flag 开启直达子图，
+    # 否则经旧链路前缀 get_mastery（need_practice_chain 时节点在册）
     if sg_practice:
-        review_targets["practice"] = "practice"
+        classify_targets["practice"] = "practice"
     if sg_review:
-        review_targets["review"] = "review"
+        classify_targets["review"] = "review"
     if need_practice_chain:
-        review_targets["get_mastery"] = "get_mastery"
-    builder.add_conditional_edges("human_review", route_after_review, review_targets)
+        classify_targets["get_mastery"] = "get_mastery"
+    builder.add_conditional_edges("classify", route_by_intent, classify_targets)
 
     # 路由兜底 → finalize（flag 关闭时该边不可达）
     builder.add_edge("fallback", "finalize")
