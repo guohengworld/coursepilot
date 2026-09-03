@@ -7,7 +7,8 @@
   1. 路由映射快照（纯函数）：route_by_intent / route_after_rag / route_after_evaluate /
      route_after_review 的输入 → 输出映射，锁定 intent×complexity 组合行为，
      显式锁定 none 意图"静默走 query_rag"的现状（未定义行为先锁住，重构后再决定改法）。
-  2. 真实图拓扑快照：build_agent_graph() 编译后的自定义节点集合（12 个）。
+  2. 真实图拓扑快照：build_agent_graph() 编译后的自定义节点集合（13 个，含路由兜底
+     fallback 节点——flag 关闭时无入边、不可达，但常驻注册）。
   3. E2E 行为快照：真实图 + MemorySaver + 全 mock 外部依赖，
      question / none / diagnose 三条完整路径的"节点执行序列 + 输出"，
      practice / review 锁到 human_review interrupt（审批前行为，含 resume 后完整路径）。
@@ -197,6 +198,36 @@ class TestRoutingSnapshot:
         assert route_by_intent({"intent": "unknown"}) == "query_rag"
         assert route_by_intent({}) == "query_rag"
 
+    def test_route_by_intent_fallback_flag_on(self):
+        """flag orch_route_fallback=True：none / "" / 未知值 / classify 降级 统一收口 fallback"""
+        from coursepilot.agent.routing import route_by_intent
+        from coursepilot.config import settings
+
+        with patch.object(settings, "orch_route_fallback", True):
+            # none → fallback（显式分支，不依赖 VALID_INTENTS 是否含 none）
+            assert route_by_intent({"intent": "none"}) == "fallback"
+            # ""（UNCLASSIFIED）/ 缺失 / 未知值（∉ VALID_INTENTS）→ fallback
+            assert route_by_intent({"intent": ""}) == "fallback"
+            assert route_by_intent({}) == "fallback"
+            assert route_by_intent({"intent": "unknown"}) == "fallback"
+            # classify 异常降级 → fallback（先于 intent 判断：降级时 intent 被写成 question）
+            assert route_by_intent({
+                "intent": "question", "classify_degraded": True,
+            }) == "fallback"
+            # 正常意图不受 flag 影响
+            assert route_by_intent({"intent": "question", "complexity": "simple"}) == "query_rag"
+            assert route_by_intent({"intent": "practice"}) == "human_review"
+            assert route_by_intent({"intent": "diagnose"}) == "diagnose"
+
+    def test_route_by_intent_fallback_off_classify_degraded_ignored(self):
+        """flag 关闭时 classify_degraded 不影响路由（锁现状，降级静默走问答）"""
+        from coursepilot.agent.routing import route_by_intent
+
+        # 默认 flag=False：即使带 classify_degraded 标记，仍按 intent=question 走问答
+        assert route_by_intent({
+            "intent": "question", "classify_degraded": True,
+        }) == "query_rag"
+
     def test_route_after_rag_snapshot(self):
         """query_rag / agentic_rag 后：practice/review 继续出题，其余收口"""
         from coursepilot.agent.routing import route_after_rag
@@ -259,12 +290,13 @@ class TestGraphTopologySnapshot:
 
     @pytest.mark.asyncio
     async def test_real_graph_custom_nodes(self, real_graph):
-        """真实图包含 12 个自定义节点（含 agentic_rag / human_review）"""
+        """真实图包含 13 个自定义节点（含 agentic_rag / human_review / fallback）"""
         custom_nodes = {n for n in real_graph.nodes if not str(n).startswith("__")}
         expected = {
             "build_context", "classify", "query_rag", "get_mastery",
             "generate_quiz", "evaluate_quiz", "create_plan", "diagnose",
             "review_plan", "finalize", "human_review", "agentic_rag",
+            "fallback",
         }
         assert custom_nodes == expected
 
@@ -318,6 +350,75 @@ class TestE2EBehaviorSnapshot:
         sequence = _node_sequence(events)
         assert sequence == ["build_context", "classify", "query_rag", "finalize"]
         assert final.values["intent"] == "none"
+        assert final.values["error"] is None
+
+    @pytest.mark.asyncio
+    async def test_none_intent_fallback_when_flag_on(self, real_graph, base_state, mock_asf):
+        """flag on + none → fallback 收口（区别于 flag 关闭的静默 query_rag）"""
+        from coursepilot.config import settings
+
+        thread_id = str(uuid4())
+        config = {"configurable": {"thread_id": thread_id}}
+        classify = AsyncMock(return_value=("none", "simple", MOCK_TOKENS))
+
+        with patch.object(settings, "orch_route_fallback", True), \
+                _mock_external_deps(mock_asf, classify_intent=classify):
+            events = []
+            async for chunk in real_graph.astream(base_state, config, stream_mode="updates"):
+                events.append(chunk)
+            final = await real_graph.aget_state(config)
+
+        sequence = _node_sequence(events)
+        assert sequence == ["build_context", "classify", "fallback", "finalize"]
+        assert final.values["intent"] == "none"           # fallback_node 收敛
+        assert final.values["fallback_reason"] == "none"
+        assert "重新描述" in final.values["answer"]
+        assert final.values["error"] is None
+
+    @pytest.mark.asyncio
+    async def test_unknown_intent_fallback_when_flag_on(self, real_graph, base_state, mock_asf):
+        """flag on + 未知 intent（∉ VALID_INTENTS）→ fallback 收口"""
+        from coursepilot.config import settings
+
+        thread_id = str(uuid4())
+        config = {"configurable": {"thread_id": thread_id}}
+        classify = AsyncMock(return_value=("do_my_homework", "simple", MOCK_TOKENS))
+
+        with patch.object(settings, "orch_route_fallback", True), \
+                _mock_external_deps(mock_asf, classify_intent=classify):
+            events = []
+            async for chunk in real_graph.astream(base_state, config, stream_mode="updates"):
+                events.append(chunk)
+            final = await real_graph.aget_state(config)
+
+        sequence = _node_sequence(events)
+        assert sequence == ["build_context", "classify", "fallback", "finalize"]
+        assert final.values["fallback_reason"] == "unclassified"
+        assert final.values["intent"] == "none"
+        assert "重新描述" in final.values["answer"]
+        assert final.values["error"] is None
+
+    @pytest.mark.asyncio
+    async def test_classify_degraded_fallback_when_flag_on(self, real_graph, base_state, mock_asf):
+        """flag on + classify 节点异常 → classify_degraded=True → fallback 收口"""
+        from coursepilot.config import settings
+
+        thread_id = str(uuid4())
+        config = {"configurable": {"thread_id": thread_id}}
+        classify = AsyncMock(side_effect=RuntimeError("classify 上游超时"))
+
+        with patch.object(settings, "orch_route_fallback", True), \
+                _mock_external_deps(mock_asf, classify_intent=classify):
+            events = []
+            async for chunk in real_graph.astream(base_state, config, stream_mode="updates"):
+                events.append(chunk)
+            final = await real_graph.aget_state(config)
+
+        sequence = _node_sequence(events)
+        assert sequence == ["build_context", "classify", "fallback", "finalize"]
+        assert final.values["fallback_reason"] == "classify_degraded"
+        assert final.values["intent"] == "none"
+        assert "重新描述" in final.values["answer"]
         assert final.values["error"] is None
 
     @pytest.mark.asyncio

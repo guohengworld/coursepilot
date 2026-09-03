@@ -78,7 +78,8 @@ class OutputState(TypedDict):
 
     字段选择：覆盖现有测试依赖的最终可观察字段（intent/complexity/
     answer/sources/token_count/llm_calls）+ 运行态标记（degraded_mode/
-    human_review_result/error）。context / retrieved_metadata / quiz_data
+    human_review_result/error）+ 路由兜底标记（fallback_reason/routing_notes）。
+    context / retrieved_metadata / quiz_data
     等中间与观测字段留在内部状态，不对外公开。
     """
     # 最终产物
@@ -89,6 +90,10 @@ class OutputState(TypedDict):
     # 路由结论（外部需观察 classify 的判定结果）
     intent: str
     complexity: str
+
+    # 路由兜底（fallback_node 写入；非兜底路径恒为缺省值）
+    fallback_reason: str | None     # none / unclassified / classify_degraded
+    routing_notes: str | None       # 兜底来源的补充说明（原始 intent / 异常信息，观测用）
 
     # 运行态标记
     degraded_mode: bool             # True=guardrail 触发，降级生成（含免责声明）
@@ -108,6 +113,9 @@ class AgentState(InputState, OutputState):
     """
     # 掌握度（DB 聚合，结构由代码固定）
     mastery: dict                   # get_mastery 输出: {"mastery_level": {...}, "weak_kps": [...]}
+
+    # 路由兜底（classify_node 异常分支写入；route_by_intent 据此收口 fallback）
+    classify_degraded: bool
 
     # 练习（LLM 产出，结构契约见 state_models.QuizData）
     quiz_data: dict                 # {"questions": [QuizQuestion]}

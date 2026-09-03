@@ -109,7 +109,7 @@ class TestGraphStructure:
 
     @pytest.mark.asyncio
     async def test_graph_has_ten_nodes(self):
-        """build_agent_graph() 注册 12 个自定义节点（P1: CRAG 节点已删，agentic_rag 替换）"""
+        """build_agent_graph() 注册 13 个自定义节点（含路由兜底 fallback；P1: CRAG 节点已删）"""
         from langgraph.checkpoint.memory import MemorySaver
 
         with patch("coursepilot.agent.graph._get_saver", return_value=MemorySaver()):
@@ -117,9 +117,10 @@ class TestGraphStructure:
             graph = await build_agent_graph()
 
         custom_nodes = {n for n in graph.nodes if not n.startswith("__")}
-        assert len(custom_nodes) == 12
+        assert len(custom_nodes) == 13
         assert "human_review" in custom_nodes
         assert "agentic_rag" in custom_nodes
+        assert "fallback" in custom_nodes
         # P1: CRAG 节点已删除
         for removed in ("retrieve", "check_sufficiency", "synthesize", "decompose", "web_search"):
             assert removed not in custom_nodes

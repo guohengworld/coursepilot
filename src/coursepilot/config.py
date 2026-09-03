@@ -116,6 +116,11 @@ class Settings(BaseSettings):
     orch_subgraph_practice: bool = False
     orch_subgraph_review: bool = False
 
+    # ── 编排层 · 路由兜底（渐进切换，默认 False 行为零变化） ──
+    # True = none / "" / 未知 intent / classify 异常统一收口到 fallback_node；
+    # False = 保持现状（四合一兜底静默走 question/query_rag）
+    orch_route_fallback: bool = False
+
     # ── Token 计价（仅内部成本估算，非用户定价） ────────
     token_cost_per_1k_input: float = 0.0005   # 每千输入 token 成本（元）
     token_cost_per_1k_output: float = 0.0015  # 每千输出 token 成本（元）

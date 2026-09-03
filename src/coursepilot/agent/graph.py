@@ -36,6 +36,7 @@ from coursepilot.agent.nodes import (
     create_plan_node,
     diagnose_node,
     evaluate_quiz_node,
+    fallback_node,
     finalize_node,
     generate_quiz_node,
     get_mastery_node,
@@ -114,6 +115,9 @@ async def build_agent_graph():
     # ── 注册节点 ──────────────────────────────────────
     builder.add_node("build_context", build_context_node)
     builder.add_node("classify", classify_node)
+    # 路由兜底收口节点：常驻注册。flag orch_route_fallback 关闭时
+    # route_by_intent 不返 "fallback"，该节点无入边、不可达（编译不报错）。
+    builder.add_node("fallback", fallback_node)
     builder.add_node("finalize", finalize_node)
     builder.add_node("human_review", human_review_node)
     # 诊断：子图 or 节点函数
@@ -150,6 +154,7 @@ async def build_agent_graph():
     classify_targets = {
         "human_review": "human_review",
         "diagnose": "diagnose",
+        "fallback": "fallback",
     }
     if sg_question:
         classify_targets["question"] = "question"
@@ -167,6 +172,9 @@ async def build_agent_graph():
     if need_practice_chain:
         review_targets["get_mastery"] = "get_mastery"
     builder.add_conditional_edges("human_review", route_after_review, review_targets)
+
+    # 路由兜底 → finalize（flag 关闭时该边不可达）
+    builder.add_edge("fallback", "finalize")
 
     # diagnose → finalize
     builder.add_edge("diagnose", "finalize")

@@ -74,7 +74,55 @@ async def classify_node(state: dict) -> dict:
         }
     except Exception as e:
         logger.exception("classify 节点异常")
-        return {"intent": "question", "complexity": "simple", "error": str(e)}
+        return {
+            "intent": "question",
+            "complexity": "simple",
+            "classify_degraded": True,
+            "error": str(e),
+        }
+
+
+# 路由兜底固定引导文案：覆盖寒暄 / 离题 / 欠指定 / 分类异常等无学习意图输入。
+# 提供"重新描述"自救入口，避免对误判为 none 的知识提问直接拒答。
+FALLBACK_ANSWER = (
+    "抱歉，我还没理解你想让我做什么。请重新描述一下你的问题："
+    "可以直接输入想了解的知识点（如「什么是进程调度」），"
+    "或试试「帮我出几道练习题」「分析一下我的学习情况」「帮我制定复习计划」这类指令。"
+)
+
+
+async def fallback_node(state: dict) -> dict:
+    """路由兜底：intent 无法进入任何业务分支时统一收口
+
+    覆盖三类输入（flag orch_route_fallback 开启时由 route_by_intent 送入）：
+      - classify 节点异常降级（classify_degraded=True）
+      - classify 判 none（寒暄 / 离题 / 欠指定）
+      - intent 缺失 / "" / ∉ VALID_INTENTS（防御性收口）
+
+    产出固定引导文案（不调 LLM）；intent 收敛为 "none" 供会话状态记录；
+    fallback_reason 区分收口来源（受控枚举），routing_notes 记录原始 intent
+    或异常信息（观测用）。QA Record 不落库，见 finalize_node Step C。
+    """
+    intent = state.get("intent", "")
+    degraded = state.get("classify_degraded", False)
+
+    if degraded:
+        reason = "classify_degraded"
+    elif intent == "none":
+        reason = "none"
+    else:
+        reason = "unclassified"
+
+    notes = str(state.get("error") or "") if degraded else f"intent={intent!r}"
+
+    return {
+        "answer": FALLBACK_ANSWER,
+        "intent": "none",
+        "fallback_reason": reason,
+        "routing_notes": notes or None,
+        "error": None,
+    }
+
 
 async def query_rag_node(state: dict) -> dict:
     """RAG 检索 + LLM 生成（携带分层记忆）。
@@ -164,9 +212,13 @@ async def finalize_node(state: dict) -> dict:
                 log_guardrail_violation,
             )
 
-            # ── Step C: 写入 QA Record（仅在 session_id 有效时） ──
+            # ── Step C: 写入 QA Record（仅有效会话；路由兜底跳过） ──
+            # fallback_reason 非空 = 本轮是兜底引导（none/未知/降级收口），
+            # update_qa_record 会触发 embedding + importance 计算，对引导文案
+            # 无意义；Step D 的会话状态更新仍须保留。
+            is_fallback = bool(state.get("fallback_reason"))
             session_id = state.get("session_id", "")
-            if session_id:
+            if session_id and not is_fallback:
                 await update_qa_record(
                     session=session,
                     user_id=state["user_id"],

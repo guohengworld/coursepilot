@@ -8,6 +8,7 @@
 """
 import logging
 
+from coursepilot.agent.state_models import VALID_INTENTS
 from coursepilot.config import settings
 from coursepilot.rag.config import config as rag_config
 
@@ -20,7 +21,17 @@ def route_by_intent(state: dict) -> str:
     复杂问题（complex question）走 Agentic RAG 节点（LLM 自主决策），
     简单问题走快速通道（query_rag）。
 
+    orch_route_fallback=True 时，四类「无法进入业务分支」的输入统一收口
+    "fallback"（区别于现状的四合一静默兜底）：
+      - classify 节点异常降级（classify_degraded=True）
+      - intent == "none"（寒暄 / 离题 / 欠指定，classify 正常输出）
+      - intent 缺失 / ""（UNCLASSIFIED）
+      - intent ∉ VALID_INTENTS（未知值）
+    none 单独显式分支，不依赖 VALID_INTENTS 是否含 none：白名单只筛未知值，
+    两者互不耦合。flag 关闭时保持原行为（末行四合一兜底）。
+
     Returns:
+        "fallback"     — 兜底收口（flag 开启时的 none/未知/缺失/降级）
         "human_review" — 需要审批的路径
         "get_mastery"  — practice / review（需要掌握度）
         "diagnose"     — diagnose
@@ -30,6 +41,12 @@ def route_by_intent(state: dict) -> str:
     """
     intent = state.get("intent", "")
     complexity = state.get("complexity", "simple")
+
+    if settings.orch_route_fallback:
+        # 收口判断先于一切业务分支：classify 异常时 intent 被写成 "question"，
+        # classify_degraded 必须最先读，否则降级请求会误入问答路径。
+        if state.get("classify_degraded") or intent == "none" or intent not in VALID_INTENTS:
+            return "fallback"
 
     if intent in ("practice", "review"):
         return "human_review"      # 需要教师审批

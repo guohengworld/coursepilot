@@ -915,6 +915,8 @@ class TestPhase2Graph:
         expected.add("human_review")
         # P1: 增加 agentic_rag 节点（CRAG 节点已删除）
         expected.add("agentic_rag")
+        # 路由兜底 fallback 节点（常驻注册，flag 关闭时不可达）
+        expected.add("fallback")
         assert custom_nodes == expected, f"缺失节点: {expected - custom_nodes}"
 
     def test_conditional_edges_in_routing_module(self):
