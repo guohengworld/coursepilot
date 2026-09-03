@@ -25,6 +25,7 @@ from coursepilot.models.practice_record import PracticeRecord
 from coursepilot.models.qa_record import QARecord
 from coursepilot.models.question import Question
 from coursepilot.models.review_plan import ReviewPlan
+from coursepilot.models.task import Task
 from coursepilot.models.user import User
 from coursepilot.models.user_profile import UserProfile
 
@@ -39,6 +40,7 @@ __all__ = [
     "PracticeRecord",
     "DiagnosisReport",
     "ReviewPlan",
+    "Task",
     "Enrollment",
     "EvalMetric",
     "AgentSession",

@@ -28,6 +28,11 @@ PERMISSION_MATRIX: dict[str, RoleHierarchy] = {
     # 学情
     "diagnosis:view": RoleHierarchy.student,
     "practice:create": RoleHierarchy.student,
+    # 教师发布任务（⑤）：assign=生成草稿/选学生，publish=发布；
+    # view 学生可查发布给自己的任务（teacher 层级更高，天然覆盖草稿查看）
+    "task:assign": RoleHierarchy.teacher,
+    "task:publish": RoleHierarchy.teacher,
+    "task:view": RoleHierarchy.student,
     # 审计
     "audit:view": RoleHierarchy.super,
     # 用户管理
