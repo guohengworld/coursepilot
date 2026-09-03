@@ -8,6 +8,7 @@ import {
   getDocuments,
   deleteDocument,
   uploadDocument,
+  enrollCourse,
 } from '@/api/courses'
 import type { Course, Document } from '@/types'
 
@@ -20,6 +21,9 @@ const course = ref<Course | null>(null)
 const documents = ref<Document[]>([])
 const loading = ref(true)
 const docLoading = ref(false)
+// 403 归属拦截态：展示"加入课程"面板，不直接踢回列表
+const denied = ref(false)
+const joining = ref(false)
 
 // Upload
 const uploadVisible = ref(false)
@@ -33,15 +37,30 @@ async function loadCourse() {
   } else {
     // ② 归属校验：非本课程成员一律 403（后端不区分"不存在/无权"，避免泄露课程存在性）
     if (res.status === 403) {
-      ElMessage.warning(
-        '您不是该课程的成员，无法访问（如需访问请联系课程教师将你加入课程）',
-      )
+      denied.value = true
+      ElMessage.warning('您不是该课程的成员，加入课程后即可查看资料并使用问答')
     } else {
       ElMessage.error('课程不存在或已删除')
+      router.push('/courses')
     }
-    router.push('/courses')
     return
   }
+}
+
+async function handleEnroll() {
+  joining.value = true
+  const res = await enrollCourse(courseId)
+  if (res.ok) {
+    ElMessage.success('加入成功，正在进入课程...')
+    denied.value = false
+    await loadCourse()
+    if (course.value) {
+      await loadDocuments()
+    }
+  } else {
+    ElMessage.error((res.data as any)?.detail || '加入失败')
+  }
+  joining.value = false
 }
 
 async function loadDocuments() {
@@ -93,7 +112,9 @@ async function handleDeleteDoc(docId: string, filename: string) {
 onMounted(async () => {
   loading.value = true
   await loadCourse()
-  await loadDocuments()
+  if (!denied.value && course.value) {
+    await loadDocuments()
+  }
   loading.value = false
 })
 
@@ -123,7 +144,23 @@ function onUploadChange(file: any) {
       </el-button>
     </div>
 
-    <el-card v-if="course" class="mb-16" shadow="never">
+    <el-result
+      v-if="denied && !course"
+      icon="warning"
+      title="您不是该课程的成员"
+      sub-title="加入课程后即可查看课程资料并使用 AI 问答"
+    >
+      <template #extra>
+        <el-space>
+          <el-button type="primary" :loading="joining" @click="handleEnroll">
+            {{ joining ? '加入中...' : '加入课程' }}
+          </el-button>
+          <el-button @click="router.push('/courses')">返回课程列表</el-button>
+        </el-space>
+      </template>
+    </el-result>
+
+    <el-card v-if="course && !denied" class="mb-16" shadow="never">
       <el-descriptions :column="2" border>
         <el-descriptions-item label="课程名称">{{ course.name }}</el-descriptions-item>
         <el-descriptions-item label="描述">{{ course.description || '-' }}</el-descriptions-item>
@@ -132,7 +169,7 @@ function onUploadChange(file: any) {
     </el-card>
 
     <!-- Quick actions -->
-    <el-card class="mb-16" shadow="never">
+    <el-card v-if="course && !denied" class="mb-16" shadow="never">
       <template #header><span>快捷操作</span></template>
       <el-space wrap>
         <el-button @click="router.push(`/knowledge-points?courseId=${courseId}`)">
@@ -156,7 +193,7 @@ function onUploadChange(file: any) {
     </el-card>
 
     <!-- Documents -->
-    <el-card shadow="never">
+    <el-card v-if="course && !denied" shadow="never">
       <template #header>
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <span>文档管理</span>

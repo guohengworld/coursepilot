@@ -104,6 +104,7 @@ export {
   createCourse,
   getCourse,
   deleteCourse,
+  enrollCourse,
   getDocuments,
   deleteDocument,
   uploadDocument,

@@ -3,13 +3,14 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { getCourses, createCourse, deleteCourse } from '@/api/courses'
+import { getCourses, createCourse, deleteCourse, enrollCourse } from '@/api/courses'
 import type { Course } from '@/types'
 
 const auth = useAuthStore()
 const router = useRouter()
 const courses = ref<Course[]>([])
 const loading = ref(false)
+const enrollingId = ref('')
 
 // Create dialog
 const dialogVisible = ref(false)
@@ -59,6 +60,18 @@ async function handleDelete(id: string, name: string) {
   }
 }
 
+async function handleEnroll(row: Course) {
+  enrollingId.value = row.id
+  const res = await enrollCourse(row.id)
+  if (res.ok) {
+    ElMessage.success(`已加入课程「${row.name}」，可查看资料并问答`)
+    await loadCourses()
+  } else {
+    ElMessage.error((res.data as any)?.detail || '加入失败')
+  }
+  enrollingId.value = ''
+}
+
 onMounted(loadCourses)
 </script>
 
@@ -79,9 +92,19 @@ onMounted(loadCourses)
           {{ new Date(row.created_at).toLocaleDateString('zh-CN') }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button size="small" @click="router.push(`/courses/${row.id}`)">详情</el-button>
+          <el-button
+            v-if="!row.role"
+            size="small"
+            type="primary"
+            plain
+            :loading="enrollingId === row.id"
+            @click="handleEnroll(row)"
+          >
+            加入课程
+          </el-button>
+          <el-button v-else size="small" @click="router.push(`/courses/${row.id}`)">详情</el-button>
           <el-button
             v-if="auth.isSuperuser"
             size="small"

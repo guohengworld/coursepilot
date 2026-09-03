@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from coursepilot.api.deps import (
+    get_course_membership,
     get_current_user,
     require_course_member,
     require_course_teacher,
@@ -25,7 +26,15 @@ from coursepilot.api.deps import (
     require_teacher,
 )
 from coursepilot.db import async_session_factory, get_session
-from coursepilot.models import Course, Document, KnowledgePoint, KnowledgeUnit, User, UserProfile
+from coursepilot.models import (
+    Course,
+    Document,
+    Enrollment,
+    KnowledgePoint,
+    KnowledgeUnit,
+    User,
+    UserProfile,
+)
 from coursepilot.rag.vector_store import VectorStore
 from coursepilot.storage.file_store import FileStore
 
@@ -46,6 +55,10 @@ class CourseOut(BaseModel):
     description: str | None
     created_by: str
     created_at: str
+    role: str | None = Field(
+        default=None,
+        description="当前登录用户在本课程内的角色：teacher/student；未加入（非成员）为 null",
+    )
 
 
 class DocumentOut(BaseModel):
@@ -89,23 +102,28 @@ class AskResponse(BaseModel):
 
 
 @router.get("")
-# 依赖注入：获取数据库异步会话、获取当前登录用户（下划线开头表示该变量仅作权限拦截，函数内不使用）
+# 依赖注入：获取数据库异步会话、获取当前登录用户
 async def list_courses(
     session: AsyncSession = Depends(get_session),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> list[CourseOut]:
-    """获取课程列表"""
+    """获取课程列表（全量可见；每门课附带当前用户的角色 role，供前端渲染加入/进入）"""
     result = await session.execute(select(Course).order_by(Course.created_at.desc()))
-    return [
-        CourseOut(
-            id=str(course.id),
-            name=course.name,
-            description=course.description,
-            created_by=str(course.created_by),
-            created_at=course.created_at.isoformat(),
+    courses: list[CourseOut] = []
+    for course in result.scalars():
+        # 判据与 deps.get_course_membership 一致（enrollments → created_by 兜底 → super 恒 teacher）
+        role = await get_course_membership(session, user, course.id)
+        courses.append(
+            CourseOut(
+                id=str(course.id),
+                name=course.name,
+                description=course.description,
+                created_by=str(course.created_by),
+                created_at=course.created_at.isoformat(),
+                role=role,
+            )
         )
-        for course in result.scalars()
-    ]
+    return courses
 
 
 @router.post("", status_code=201)
@@ -131,6 +149,8 @@ async def create_course(
         description=course.description,
         created_by=str(course.created_by),
         created_at=course.created_at.isoformat(),
+        # 创建者天然是课程教师（created_by 兜底判据），前端据此渲染管理入口
+        role="teacher",
     )
 
 
@@ -141,7 +161,7 @@ async def get_course(
     user: User = Depends(get_current_user),
 ):
     """获取课程详情（② 归属校验：仅本课程成员可见）"""
-    await require_course_member(session, user, course_id)
+    role = await require_course_member(session, user, course_id)
     course = await _get_course_or_404(session, course_id)
     return CourseOut(
         id=str(course.id),
@@ -149,7 +169,28 @@ async def get_course(
         description=course.description,
         created_by=str(course.created_by),
         created_at=course.created_at.isoformat(),
+        role=role,
     )
+
+
+@router.post("/{course_id}/enroll")
+async def enroll_course(
+    course_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """学生自助加入课程（幂等，开放选课语义）。
+
+    任何登录用户都可加入任意课程（role=student）。已在课程内（teacher 级或 student）
+    直接返回当前角色，不重复插入；(user_id, course_id) 联合唯一约束兜底并发。
+    """
+    await _get_course_or_404(session, course_id)
+    role = await get_course_membership(session, user, course_id)
+    if role is not None:
+        return {"status": "already_member", "role": role}
+    session.add(Enrollment(user_id=user.id, course_id=course_id, role="student"))
+    await session.flush()
+    return {"status": "enrolled", "role": "student"}
 
 
 @router.delete("/{course_id}")

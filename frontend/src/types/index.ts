@@ -40,6 +40,8 @@ export interface Course {
   description: string | null
   created_by: string
   created_at: string
+  /** 当前用户在本课程内的角色：'teacher' | 'student' | null（未加入） */
+  role?: string | null
 }
 
 export interface Document {

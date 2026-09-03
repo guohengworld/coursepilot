@@ -18,6 +18,13 @@ export function deleteCourse(id: string) {
   return request<{ deleted: string }>('DELETE', `/courses/${id}`)
 }
 
+export function enrollCourse(id: string) {
+  return request<{ status: 'enrolled' | 'already_member'; role: string }>(
+    'POST',
+    `/courses/${id}/enroll`,
+  )
+}
+
 export function getDocuments(courseId: string) {
   return request<Document[]>('GET', `/courses/${courseId}/documents`)
 }
