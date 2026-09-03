@@ -206,10 +206,23 @@ async def finalize_node(state: dict) -> dict:
         # Step A: guardrails（纯计算，事务前；异常则整体失败，与旧序一致）
         guard_issues = _run_guardrails(state)
 
-        # Step C/D(+滚动压缩)/E: 唯一主事务（QA 记录 / 会话状态 / 诊断报告）
-        compaction_count = await _persist_core(
-            state, llm_calls, total_tokens, total_prompt, total_completion,
-        )
+        # Step C/D/E: 唯一主事务（QA 记录 / 会话状态 / 诊断报告）
+        await _persist_core(state, total_tokens, total_prompt, total_completion)
+
+        # 滚动压缩（C4b：移出主事务，独立事务 + best-effort）——失败只丢压缩，
+        # 不影响已提交的核心持久化；下一轮 needs_compaction 仍为真自动重试。
+        compaction_count = state.get("compaction_count", 0)
+        compaction_count += await _compact_best_effort(state)
+
+        # 记录压缩次数到 llm_calls 便于可观测（P5）
+        if compaction_count > 0:
+            llm_calls.append({
+                "node": "compaction",
+                "compacted_turns": compaction_count,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            })
 
         # Step F: 异步 audit 日志（不阻塞，不强等）
         _spawn_audit_tasks(state, guard_issues)
@@ -243,20 +256,19 @@ def _run_guardrails(state: dict) -> list[str]:
 
 async def _persist_core(
     state: dict,
-    llm_calls: list[dict],
     total_tokens: int,
     total_prompt: int,
     total_completion: int,
-) -> int:
-    """Step C/D/E：核心持久化（唯一事务）。
+) -> None:
+    """Step C/D/E：核心持久化（唯一主事务）。
 
     - Step C: QA Record（仅有效会话；路由兜底跳过 —— ① 遗留逻辑落点）
-    - Step D: 会话状态更新 + 滚动压缩（压缩暂在事务内，C4b 将移出主事务）
+    - Step D: 会话状态更新（L1 conversation / status / quiz_data）
     - Step E: 学情诊断报告
 
-    返回 compaction_count（供 finalize 回写 state 与 P5 快照）。
+    滚动压缩已移出（见 _compact_best_effort），本函数不包含任何 LLM 调用，
+    事务短、失败域小。任何异常向外抛出 → finalize 返回 error。
     """
-    compaction_count = state.get("compaction_count", 0)
     # fallback_reason 非空 = 本轮是兜底引导（none/未知/降级收口），
     # update_qa_record 会触发 embedding + importance 计算，对引导文案无意义；
     # Step D 的会话状态更新仍须保留。
@@ -282,9 +294,8 @@ async def _persist_core(
             )
 
         # ── Step D: 更新会话状态（含 L1/L2 记忆，仅在 session_id 有效时） ──
-        agent_session = None
         if session_id:
-            agent_session = await _update_session_intent(
+            await _update_session_intent(
                 session, session_id,
                 state.get("intent", "question"),
                 quiz_data=state.get("quiz_data"),
@@ -292,20 +303,6 @@ async def _persist_core(
                 sources=state.get("sources", []),
                 query=state.get("query", ""),
             )
-
-        # 滚动压缩：当 L1 过长时，把老轮次压缩进 rolling_summary
-        if agent_session:
-            compaction_count += await _maybe_compact_session(state, agent_session)
-
-        # 记录压缩次数到 llm_calls 便于可观测（P5）
-        if compaction_count > 0:
-            llm_calls.append({
-                "node": "compaction",
-                "compacted_turns": compaction_count,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            })
 
         # ── Step E: 保存学情诊断报告 ──
         diagnosis = state.get("diagnosis")
@@ -327,7 +324,37 @@ async def _persist_core(
         # ── 提交事务 ──
         await session.commit()
 
-    return compaction_count
+
+async def _compact_best_effort(state: dict) -> int:
+    """滚动压缩（C4b：主事务外独立事务，best-effort）。
+
+    背景：压缩含一次 LLM 调用。若仍置于 commit 前的主事务内，LLM 异常/超时
+    会把整轮核心持久化（QA 记录 / 会话状态 / 诊断报告）一起回滚 —— 用户已看到
+    答案而会话永不 completed。移出后主事务先行 commit（核心数据必不丢），
+    压缩独立提交，失败仅记日志返回 0；下一轮 needs_compaction 仍为真自动重试，自愈。
+
+    返回本轮实际压缩轮数（无会话 / 无需压缩 / 失败均返回 0）。
+    """
+    session_id = state.get("session_id", "")
+    if not session_id:
+        return 0
+    try:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(AgentSession).where(AgentSession.id == UUID(session_id))
+            )
+            agent_session = result.scalar_one_or_none()
+            if not agent_session:
+                return 0
+            count = await _maybe_compact_session(state, agent_session)
+            if count > 0:
+                await session.commit()
+            return count
+    except Exception:
+        logger.exception(
+            "滚动压缩失败（best-effort，下轮自动重试）session=%s", session_id
+        )
+        return 0
 
 
 def _spawn_audit_tasks(state: dict, guard_issues: list[str]) -> None:
