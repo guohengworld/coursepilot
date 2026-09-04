@@ -116,10 +116,13 @@ class Settings(BaseSettings):
     orch_subgraph_practice: bool = False
     orch_subgraph_review: bool = False
 
-    # ── 编排层 · 路由兜底（渐进切换，默认 False 行为零变化） ──
-    # True = none / "" / 未知 intent / classify 异常统一收口到 fallback_node；
-    # False = 保持现状（四合一兜底静默走 question/query_rag）
-    orch_route_fallback: bool = False
+    # ── 编排层 · 路由兜底（默认 True）──
+    # True = none / "" / 未知 intent / classify 异常统一收口到 fallback_node，
+    # 返回固定引导文案（不调 LLM、不检索），避免元对话白白跑完整 RAG 管道
+    # 并污染画像 / L3 记忆（2026-09-04 本机日志确认：none 轮静默走 query_rag
+    # 白耗 3.9s 检索 + 4 次 LLM 调用）；
+    # False = 旧行为（四合一兜底静默走 question/query_rag）
+    orch_route_fallback: bool = True
 
     # ── Token 计价（仅内部成本估算，非用户定价） ────────
     token_cost_per_1k_input: float = 0.0005   # 每千输入 token 成本（元）

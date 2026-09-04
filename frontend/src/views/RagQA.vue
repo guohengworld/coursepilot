@@ -4,7 +4,8 @@ import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { getCourses, askQuestion } from '@/api/courses'
 import { useSSE } from '@/composables/useSSE'
-import type { Course, AskResponse } from '@/types'
+import RichText from '@/components/RichText.vue'
+import type { Course, AskResponse, CitationRef } from '@/types'
 
 const route = useRoute()
 const auth = useAuthStore()
@@ -14,6 +15,8 @@ const selectedCourseId = ref(route.query.courseId as string || '')
 const question = ref('')
 const answer = ref('')
 const metadata = ref<AskResponse | null>(null)
+/** ref id → 教材来源，供 RichText 渲染可点击引用上标与来源面板 */
+const citationMap = ref<Record<string, CitationRef>>({})
 const loading = ref(false)
 const errorMsg = ref('')
 const mode = ref<'stream' | 'sync'>('stream')
@@ -24,6 +27,7 @@ interface QaSession {
   question: string
   answer: string
   metadata: AskResponse | null
+  citationMap: Record<string, CitationRef>
 }
 const qaHistory = ref<QaSession[]>([])
 let sessionCounter = 0
@@ -45,12 +49,14 @@ function handleNewSession() {
       question: question.value,
       answer: answer.value,
       metadata: metadata.value ? { ...metadata.value } : null,
+      citationMap: { ...citationMap.value },
     })
   }
   // 清空当前输入
   question.value = ''
   answer.value = ''
   metadata.value = null
+  citationMap.value = {}
   errorMsg.value = ''
 }
 
@@ -58,6 +64,7 @@ function showHistoryItem(item: QaSession) {
   question.value = item.question
   answer.value = item.answer
   metadata.value = item.metadata
+  citationMap.value = item.citationMap || {}
   errorMsg.value = ''
 }
 
@@ -67,6 +74,7 @@ async function handleAsk() {
   // 清空回答区
   answer.value = ''
   metadata.value = null
+  citationMap.value = {}
   errorMsg.value = ''
 
   if (mode.value === 'stream') {
@@ -85,6 +93,20 @@ async function handleAsk() {
         errorMsg.value = err
         loading.value = false
       },
+      // 流式：末尾 meta 事件携带引用来源等元数据（与同步响应对齐）
+      (meta) => {
+        const map = (meta.citation_map || {}) as Record<string, CitationRef>
+        citationMap.value = map
+        metadata.value = {
+          answer: answer.value,
+          trace_id: meta.trace_id || '',
+          rewritten_query: meta.rewritten_query || '',
+          citations: [],
+          top_scores: meta.top_scores || [],
+          source_kp_paths: meta.source_kp_paths || [],
+          citation_map: map,
+        }
+      },
     )
   } else {
     loading.value = true
@@ -93,6 +115,7 @@ async function handleAsk() {
       const data = res.data as AskResponse
       answer.value = data.answer
       metadata.value = data
+      citationMap.value = data.citation_map || {}
     } else {
       errorMsg.value = (res.data as any)?.detail || '请求失败'
     }
@@ -174,7 +197,7 @@ onMounted(loadCourses)
             <span>回答</span>
           </template>
 
-          <div class="answer-content">{{ answer }}</div>
+          <RichText :content="answer" :citations="citationMap" />
 
           <template v-if="isStreaming">
             <el-icon class="is-loading" :size="16"><Loading /></el-icon>
@@ -293,12 +316,6 @@ onMounted(loadCourses)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.answer-content {
-  white-space: pre-wrap;
-  line-height: 1.7;
-  font-size: 15px;
 }
 
 .action-row {

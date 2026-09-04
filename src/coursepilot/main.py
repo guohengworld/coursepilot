@@ -19,10 +19,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# 原生库加载顺序约束：
+# pymilvus（连带加载 pyarrow/arrow.dll）必须在 torch 之前导入。
+# 反之 torch 先加载、ask 接口函数体内才懒加载 pymilvus，arrow.dll 会触发
+# 0xc0000005 访问冲突，进程无输出直接退出（Vite 代理侧表现为 502 Bad Gateway）。
+import pymilvus  # noqa: F401, E402
+
+# 注意：agent 链（torch/FlagEmbedding）必须最先导入——本机实测若 admin/auth/courses
+# 先于 agent 导入，torch 后加载会触发原生库顺序冲突导致堆损坏（0xC0000374），
+# 进程无任何输出直接退出。此顺序不可调回（2026-09-03 用户本机终端同样复现）。
+from coursepilot.api.agent import router as agent_router
 from coursepilot.api.admin import router as admin_router
 from coursepilot.api.auth import router as auth_router
 from coursepilot.api.courses import router as courses_router
-from coursepilot.api.agent import router as agent_router
 from coursepilot.api.practice import router as practice_router
 from coursepilot.api.tasks import router as tasks_router
 from coursepilot.db import _get_engine

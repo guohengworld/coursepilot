@@ -191,11 +191,11 @@ class TestRoutingSnapshot:
         assert route_by_intent({"intent": "review"}) == "get_mastery"
         # diagnose → 直接诊断（只读）
         assert route_by_intent({"intent": "diagnose"}) == "diagnose"
-        # none 意图：当前静默走 query_rag（锁现状，flag 开启时显式收口 fallback）
-        assert route_by_intent({"intent": "none"}) == "query_rag"
-        # 未知 / 缺失 intent → 默认 query_rag
-        assert route_by_intent({"intent": "unknown"}) == "query_rag"
-        assert route_by_intent({}) == "query_rag"
+        # none 意图：默认收口 fallback（orch_route_fallback 默认 True）
+        assert route_by_intent({"intent": "none"}) == "fallback"
+        # 未知 / 缺失 intent → 收口 fallback
+        assert route_by_intent({"intent": "unknown"}) == "fallback"
+        assert route_by_intent({}) == "fallback"
 
     def test_route_by_intent_fallback_flag_on(self):
         """flag orch_route_fallback=True：none / "" / 未知值 / classify 降级 统一收口 fallback"""
@@ -219,13 +219,15 @@ class TestRoutingSnapshot:
             assert route_by_intent({"intent": "diagnose"}) == "diagnose"
 
     def test_route_by_intent_fallback_off_classify_degraded_ignored(self):
-        """flag 关闭时 classify_degraded 不影响路由（锁现状，降级静默走问答）"""
+        """flag 关闭时 classify_degraded 不影响路由（锁旧行为，降级静默走问答）"""
         from coursepilot.agent.routing import route_by_intent
+        from coursepilot.config import settings
 
-        # 默认 flag=False：即使带 classify_degraded 标记，仍按 intent=question 走问答
-        assert route_by_intent({
-            "intent": "question", "classify_degraded": True,
-        }) == "query_rag"
+        # flag=False：即使带 classify_degraded 标记，仍按 intent=question 走问答
+        with patch.object(settings, "orch_route_fallback", False):
+            assert route_by_intent({
+                "intent": "question", "classify_degraded": True,
+            }) == "query_rag"
 
     def test_route_after_rag_snapshot(self):
         """query_rag / agentic_rag 后：practice/review 继续出题，其余收口"""
@@ -316,14 +318,17 @@ class TestE2EBehaviorSnapshot:
         assert values["error"] is None
 
     @pytest.mark.asyncio
-    async def test_none_intent_path(self, real_graph, base_state, mock_asf):
-        """none 意图当前静默走 query_rag（锁现状）"""
+    async def test_none_intent_path_flag_off(self, real_graph, base_state, mock_asf):
+        """flag 关闭时 none 意图静默走 query_rag（锁旧行为；默认已翻转为 fallback 收口）"""
+        from coursepilot.config import settings
+
         thread_id = str(uuid4())
         config = {"configurable": {"thread_id": thread_id}}
 
         events = []
         classify = AsyncMock(return_value=("none", "simple", MOCK_TOKENS))
-        with _mock_external_deps(mock_asf, classify_intent=classify):
+        with patch.object(settings, "orch_route_fallback", False), \
+                _mock_external_deps(mock_asf, classify_intent=classify):
             async for chunk in real_graph.astream(base_state, config, stream_mode="updates"):
                 events.append(chunk)
             final = await real_graph.aget_state(config)

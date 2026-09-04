@@ -3,7 +3,8 @@ import { ref, nextTick, onMounted, onUnmounted, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { getCourses, chat, getSession, listSessions, approveSession, deleteSession } from '@/api'
 import { getQuiz, submitAnswers } from '@/api/practice'
-import type { Course, SessionListItem } from '@/types'
+import RichText from '@/components/RichText.vue'
+import type { Course, SessionListItem, CitationRef, ConversationTurn } from '@/types'
 import type { ChatAcceptedResponse, SessionPollResponse, QuizQuestion, SubmitResponse, DiagnosisData } from '@/types'
 
 const route = useRoute()
@@ -19,6 +20,8 @@ interface Message {
   content: string
   intent?: string
   sources?: Record<string, unknown>[]
+  /** 该轮回答的 ref id → 来源（正文 <ref id="N" /> 渲染上标与来源面板用） */
+  citations?: Record<string, CitationRef>
   sessionId?: string
   quiz?: QuizQuestion[]
   answers: Record<string, string>
@@ -35,6 +38,19 @@ const sessionsLoading = ref(false)
 const submittingMap = reactive<Record<string, boolean>>({})
 let pollTimer: ReturnType<typeof setInterval> | null = null
 const chatMessagesRef = ref<HTMLElement | null>(null)
+
+/** 从会话轮询结果里取最近一条带引用的 assistant 轮次 citation_map */
+function lastTurnCitations(data: SessionPollResponse): Record<string, CitationRef> | undefined {
+  const conv = data.conversation
+  if (!conv) return undefined
+  for (let i = conv.length - 1; i >= 0; i--) {
+    const t: ConversationTurn = conv[i]
+    if (t.role === 'assistant' && t.citations && Object.keys(t.citations).length) {
+      return t.citations as Record<string, CitationRef>
+    }
+  }
+  return undefined
+}
 
 function scrollToBottom() {
   nextTick(() => {
@@ -111,6 +127,7 @@ function startPolling(sessionId: string, placeholder: Message) {
     placeholder.content = data.answer || ''
     placeholder.intent = data.intent
     placeholder.sources = data.sources || undefined
+    placeholder.citations = lastTurnCitations(data)
     placeholder.sessionId = data.session_id
 
     // 练习：从轮询结果加载题目
@@ -189,6 +206,8 @@ async function selectSession(sessionId: string) {
           answers: {},
           submitted: false,
           intent: turn.intent || undefined,
+          sources: turn.sources ? (turn.sources as Record<string, unknown>[]) : undefined,
+          citations: turn.citations ? (turn.citations as Record<string, CitationRef>) : undefined,
           sessionId: sessionId,
         }
         // 只有最后一条 assistant 消息可能附带题目或诊断
@@ -426,8 +445,13 @@ onMounted(() => {
                 </el-tag>
               </div>
 
-              <!-- 消息内容 -->
-              <div class="message-content">{{ msg.content }}</div>
+              <!-- 消息内容：assistant 富文本（Markdown+公式+引用面板），user 纯文本 -->
+              <RichText
+                v-if="msg.role === 'assistant'"
+                :content="msg.content"
+                :citations="msg.citations"
+              />
+              <div v-else class="message-content">{{ msg.content }}</div>
 
               <!-- 练习交互区域（仅 practice intent） -->
               <div v-if="msg.quiz && msg.intent === 'practice'" class="quiz-area">
@@ -576,8 +600,8 @@ onMounted(() => {
                 </div>
               </div>
 
-              <!-- 来源折叠面板 -->
-              <div v-if="msg.sources && msg.sources.length" class="message-sources">
+              <!-- 来源折叠面板（仅旧会话：无 citations 时才用 JSON 兜底展示） -->
+              <div v-if="msg.sources && msg.sources.length && !msg.citations" class="message-sources">
                 <el-collapse>
                   <el-collapse-item title="来源" name="sources">
                     <pre>{{ JSON.stringify(msg.sources, null, 2) }}</pre>

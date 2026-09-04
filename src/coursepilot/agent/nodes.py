@@ -241,7 +241,12 @@ def _run_guardrails(state: dict) -> list[str]:
     """Step A: guardrails 检查（纯计算）。
 
     输入 answer/context/sources，产出违规清单（仅告警日志，不阻断）。
+    兜底轮次跳过：固定引导文案非 LLM 生成、无检索上下文，
+    检查只会产出假警报（如「较长回答缺少引用标记」）。
     """
+    if state.get("fallback_reason"):
+        return []
+
     from coursepilot.governance.guardrails import guard_answer
 
     guard_issues = guard_answer(
@@ -301,6 +306,8 @@ async def _persist_core(
                 quiz_data=state.get("quiz_data"),
                 answer=state.get("answer", ""),
                 sources=state.get("sources", []),
+                citation_map=state.get("retrieved_metadata", {}).get("citation_map", {})
+                or {},
                 query=state.get("query", ""),
             )
 
@@ -394,7 +401,15 @@ def _spawn_audit_tasks(state: dict, guard_issues: list[str]) -> None:
 
 
 def _spawn_side_effects(state: dict) -> None:
-    """Step G/H/I: profile 更新、L3 语义记忆抽取、QA embedding 补全。"""
+    """Step G/H/I: profile 更新、L3 语义记忆抽取、QA embedding 补全。
+
+    兜底轮次（none/未知/降级收口）整体跳过：元对话对画像与 L3 长期记忆
+    是噪音（会污染后续个性化与记忆召回）；QA Record 未落库
+    （见 _persist_core），embedding 补全也无事可做。
+    """
+    if state.get("fallback_reason"):
+        return
+
     # ── Step G: Profile 更新 ──
     _spawn_background(update_profile(
         user_id=state["user_id"],
@@ -453,9 +468,14 @@ async def _update_session_intent(
     quiz_data: dict | None = None,
     answer: str | None = None,
     sources: list[dict] | None = None,
+    citation_map: dict | None = None,
     query: str | None = None,
 ) -> AgentSession | None:
     """更新 agent_session 的 intent、answer、sources、quiz_data、conversation 等字段。
+
+    citation_map 为 {ref_id: {kp_path, page_ref, uuid}}（回答正文 <ref id="N" />
+    的引用来源），随该轮 assistant 一起写入 conversation JSONB，供前端渲染
+    可点击引用上标与来源面板。旧会话无此键时前端自然降级。
 
     返回更新后的 AgentSession 实例，供调用方继续修改（如滚动摘要）。
     """
@@ -483,6 +503,7 @@ async def _update_session_intent(
         "content": answer or "",
         "intent": intent,
         "sources": sources or [],
+        "citations": citation_map or {},
         "query": query or "",
     })
     agent_session.conversation = conv

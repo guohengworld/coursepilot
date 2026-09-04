@@ -70,6 +70,13 @@ export interface AskRequest {
   question: string
 }
 
+/** 引用 id 对应的教材来源（与后端 citation_map 对齐） */
+export interface CitationRef {
+  uuid?: string
+  kp_path?: string
+  page_ref?: string
+}
+
 export interface AskResponse {
   answer: string
   trace_id: string
@@ -77,6 +84,8 @@ export interface AskResponse {
   citations: number[]
   top_scores: number[]
   source_kp_paths: string[]
+  /** ref id → {uuid, kp_path, page_ref}，供前端渲染引用来源面板 */
+  citation_map?: Record<string, CitationRef>
 }
 
 // ===== Agent =====
@@ -100,6 +109,16 @@ export interface DiagnosisData {
   recommendations: string
 }
 
+/** Agent 会话中的一轮对话 */
+export interface ConversationTurn {
+  role: string
+  content: string
+  intent?: string | null
+  sources?: Record<string, unknown>[] | null
+  /** 该轮回答的 ref id → 来源映射（后端在 assistant 轮次中持久化） */
+  citations?: Record<string, CitationRef> | null
+}
+
 export interface SessionPollResponse {
   session_id: string
   course_id: string
@@ -112,7 +131,7 @@ export interface SessionPollResponse {
   diagnosis_data: DiagnosisData | null
   token_count: number
   estimated_cost: number
-  conversation: { role: string; content: string; intent?: string | null }[] | null
+  conversation: ConversationTurn[] | null
   created_at: string
   updated_at: string
 }

@@ -199,6 +199,34 @@ async function doStreamRequest(resolvedPath: string, headers: Record<string, str
     let buffer = ''
     let tokenCount = 0
 
+    // 兼容 JSON 信封（{"t":"tok","c":...} / {"t":"meta"} / {"t":"done"}）
+    // 与旧版裸文本 token + "[DONE]"
+    const consume = (data: string) => {
+      if (data === '[DONE]') {
+        responseBody.value += '\n--- [Stream Complete] ---'
+        return true
+      }
+      if (data.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(data)
+          if (parsed.t === 'tok' && typeof parsed.c === 'string') {
+            tokenCount++
+            responseBody.value += parsed.c
+          } else if (parsed.t === 'done') {
+            responseBody.value += '\n--- [Stream Complete] ---'
+            return true
+          }
+          // meta 事件不追加正文
+          return false
+        } catch {
+          /* fallthrough：当作裸文本 */
+        }
+      }
+      tokenCount++
+      responseBody.value += data
+      return false
+    }
+
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
@@ -206,14 +234,8 @@ async function doStreamRequest(resolvedPath: string, headers: Record<string, str
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6)
-          if (data === '[DONE]') {
-            responseBody.value += '\n--- [Stream Complete] ---'
-            return
-          }
-          tokenCount++
-          responseBody.value += data
+        if (consume(line.slice(line.startsWith('data: ') ? 6 : 0))) {
+          return
         }
       }
     }

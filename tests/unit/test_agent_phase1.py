@@ -183,8 +183,9 @@ class TestGraphStructure:
         assert route_by_intent({"intent": "practice"}) == "get_mastery"
         assert route_by_intent({"intent": "review"}) == "get_mastery"
         assert route_by_intent({"intent": "diagnose"}) == "diagnose"
-        assert route_by_intent({"intent": "unknown"}) == "query_rag"
-        assert route_by_intent({}) == "query_rag"
+        # orch_route_fallback 默认 True：未知 / 缺失 intent 收口 fallback
+        assert route_by_intent({"intent": "unknown"}) == "fallback"
+        assert route_by_intent({}) == "fallback"
         # P1: complex question 走 Agentic RAG
         assert route_by_intent({"intent": "question", "complexity": "complex"}) == "agentic_rag"
         assert route_by_intent({"intent": "question", "complexity": "simple"}) == "query_rag"

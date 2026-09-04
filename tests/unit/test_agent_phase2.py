@@ -119,8 +119,9 @@ class TestRoutingPhase2:
 
     def test_route_by_intent_unknown_fallback(self):
         from coursepilot.agent.routing import route_by_intent
-        assert route_by_intent({"intent": "unknown"}) == "query_rag"
-        assert route_by_intent({}) == "query_rag"
+        # orch_route_fallback 默认 True：未知 / 缺失 intent 收口 fallback
+        assert route_by_intent({"intent": "unknown"}) == "fallback"
+        assert route_by_intent({}) == "fallback"
 
     def test_route_by_intent_invalid_type_still_returns_str(self):
         from coursepilot.agent.routing import route_by_intent

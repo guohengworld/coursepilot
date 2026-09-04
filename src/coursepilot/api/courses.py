@@ -486,9 +486,21 @@ async def ask_course_stream(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """RAG 问答（SSE 流式输出）"""
+    """RAG 问答（SSE 流式输出）
+
+    事件为 JSON 信封，每个事件一行 ``data:``（物理单行，避免裸文本流式
+    丢失换行、破坏 Markdown 分段）：
+      - 回答增量：  data: {"t": "tok", "c": "<token>"}
+      - 引用元数据：data: {"t": "meta", "citation_map": {...}, ...}   （流结束前）
+      - 结束标记：  data: {"t": "done"}
+    引用格式与同步 ask 对齐，供前端渲染可点击上标 + 来源面板。
+    """
+    import json
+    from uuid import uuid4
+
     from fastapi.responses import StreamingResponse
 
+    from coursepilot.rag.citation import extract_citations
     from coursepilot.rag.generator import Generator, build_course_context
     from coursepilot.rag.retriever import Retriever
 
@@ -497,15 +509,44 @@ async def ask_course_stream(
     await _get_course_or_404(session, course_id)
 
     retriever = Retriever()
-    context, _metadata = await retriever.retrieve(session, body.question, str(course_id))
+    context, metadata = await retriever.retrieve(session, body.question, str(course_id))
 
     course_context = await build_course_context(session, course_id)
     generator = Generator()
 
+    # 引用 id → 来源元数据（retriever 已在检索阶段按 <source id=N> 建好）
+    citation_map_all = metadata.get("citation_map", {})
+    trace_id = str(uuid4())[:8]
+
+    def _meta_event(full_answer: str) -> str:
+        cited = extract_citations(full_answer)
+        cited_map = {
+            rid: citation_map_all[rid]
+            for rid in map(str, cited)
+            if rid in citation_map_all
+        }
+        payload = {
+            "t": "meta",
+            "citation_map": cited_map,
+            "trace_id": trace_id,
+            "rewritten_query": metadata.get("query_rewritten", ""),
+            "source_kp_paths": metadata.get("source_kp_paths", []),
+            "top_scores": metadata.get("top_rerank_scores", []),
+        }
+        return "data: " + json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        ) + "\n\n"
+
     async def event_stream():
+        parts: list[str] = []
         async for token in generator.generate_stream(body.question, context, course_context):
-            yield f"data: {token}\n\n"
-        yield "data: [DONE]\n\n"
+            parts.append(token)
+            data = json.dumps(
+                {"t": "tok", "c": token}, ensure_ascii=False, separators=(",", ":")
+            )
+            yield f"data: {data}\n\n"
+        yield _meta_event("".join(parts))
+        yield 'data: {"t":"done"}\n\n'
 
     return StreamingResponse(
         event_stream(),
